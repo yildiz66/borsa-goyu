@@ -7,3 +7,4 @@ schedule
 flask
 requests
 beautifulsoup4
+ta
