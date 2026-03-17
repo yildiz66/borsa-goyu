@@ -2,7 +2,7 @@ pyTelegramBotAPI
 yfinance
 pandas
 pandas_ta
-google-generativeai
+google.generativeai as genai
 matplotlib
 schedule
 flask
