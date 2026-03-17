@@ -1,20 +1,21 @@
 import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, schedule
+import pandas as pd
 import matplotlib
-# Hatayı çözmek için 'use' komutunu importun hemen ardından veriyoruz
+# Hatayı önlemek için matplotlib ayarını en başta yapıyoruz
 matplotlib.use("Agg") 
 import matplotlib.pyplot as plt
-import google.generativeai as genai # Uyarıyı şu anlık görmezden gelebiliriz, sistem çalışır
+import google.generativeai as genai
 from telebot import types
 from flask import Flask
 
-# Uyarıları sessize al
+# Gereksiz uyarıları kapat
 warnings.filterwarnings("ignore")
 
-# --- 1. AYARLAR ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Borsabot Aktif", 200
 
+# API Bilgileri
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 MY_ID = os.environ.get("MY_CHAT_ID")
@@ -23,10 +24,8 @@ bot = telebot.TeleBot(TOKEN)
 genai.configure(api_key=GEMINI_KEY)
 ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 147 Hisse Listesi (Kısaltılmış örnek, sizdeki tam listeyi buraya koyun)
-KATILIM_LISTESI = ["AKSA", "ASELS", "THYAO", "TUPRS", "FROTO", "EREGL", "SASA", "SISE"] # Listenin devamı aynı kalsın
-
-# --- 2. FONKSİYONLAR ---
+# Buraya tam listenizi yapıştırın
+KATILIM_LISTESI = ["AKSA", "ALTNY", "ASELS", "BIMAS", "THYAO", "TUPRS", "SASA", "EREGL"]
 
 def analiz_motoru(hisse, donem="1d"):
     try:
@@ -39,61 +38,83 @@ def analiz_motoru(hisse, donem="1d"):
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
         df["RSI"] = ta.rsi(df["Close"], length=14)
-        df["EMA9"] = ta.ema(df["Close"], length=9)
         bb = ta.bbands(df["Close"], length=20)
         
         last = df.iloc[-1]
-        res = {
+        return {
             "ticker": ticker, "fiyat": float(last["Close"]), "rsi": float(last["RSI"]),
-            "hedef": float(bb.iloc[-1, 2]), "df": df, "vade": donem
+            "hedef": float(bb.iloc[-1, 2]), "df": df
         }
-        return res
-    except: return None
+    except Exception as e:
+        print(f"Hata ({hisse}): {e}")
+        return None
 
 def gemini_strateji_al(hisse_listesi, vade_adi):
     try:
-        ozet = "".join([f"{h['ticker']}: Fiyat {h['fiyat']}, RSI {h['rsi']}. " for h in hisse_listesi])
-        prompt = (f"Borsa uzmanı olarak bu hisseleri kıyasla: {ozet}. "
-                  f"Emir Bey için en potansiyelli 2 tanesini seç ve nedenini açıkla.")
+        ozet = "".join([f"{h['ticker']}: Fiyat {h['fiyat']}, RSI {round(h['rsi'],1)}. " for h in hisse_listesi])
+        prompt = (f"Bir borsa stratejisti olarak şu hisseleri {vade_adi} periyotta kıyasla: {ozet}. "
+                  f"Hacim artışını ve haberleri düşünerek Emir Bey için en iyi 1 veya 2 tanesini seç. "
+                  f"Nedenini kısa açıkla ve net bir hedef ver.")
         response = ai_model.generate_content(prompt)
         return response.text
-    except: return "AI yorumu şu an ulaşılamaz."
+    except: return "AI seçimi şu an yapılamadı."
 
-# --- 3. RAPORLAMA ---
-
-def rapor_gonder(vade_kod="1d", vade_adi="GÜNLÜK"):
+def rapor_hazirla_ve_gonder(vade_kod="1d", vade_adi="GÜNLÜK"):
     havuz = []
     for h in KATILIM_LISTESI:
         res = analiz_motoru(h, vade_kod)
+        # RSI 48-68 arası teknik olarak "yolun başında" demektir
         if res and 48 < res["rsi"] < 68: havuz.append(res)
     
     en_iyi_5 = sorted(havuz, key=lambda x: x['rsi'], reverse=True)[:5]
-    if not en_iyi_5: return
+    if not en_iyi_5:
+        bot.send_message(MY_ID, f"😕 {vade_adi} için kriterlere uygun hisse bulunamadı.")
+        return
 
     for t in en_iyi_5:
-        mesaj = f"💎 *{vade_adi} ANALİZ:* {t['ticker']}\n🛒 *Fiyat:* `{t['fiyat']}` | 🎯 *Hedef:* `{round(t['hedef'], 2)}`"
-        plt.figure(figsize=(5, 2)); plt.plot(t["df"]["Close"].tail(30).values, color="green"); plt.axis('off')
+        pot = round(((t["hedef"] - t["fiyat"]) / t["fiyat"]) * 100, 1)
+        mesaj = (f"💎 *{vade_adi} ANALİZ:* {t['ticker']}\n"
+                 f"🛒 *Fiyat:* `{t['fiyat']}` | 🎯 *Hedef:* `{round(t['hedef'], 2)}` (%{pot})")
+        
+        plt.figure(figsize=(5, 2.5)); plt.plot(t["df"]["Close"].tail(30).values, color="green"); plt.axis('off')
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
         bot.send_photo(MY_ID, buf, caption=mesaj, parse_mode="Markdown"); plt.close("all")
+        time.sleep(1)
 
-    ai_yorum = gemini_strateji_al(en_iyi_5, vade_adi)
-    bot.send_message(MY_ID, f"⭐ *ÖZEL SEÇİM*\n\n{ai_yorum}", parse_mode="Markdown")
-
-# --- 4. KOMUTLAR VE ZAMANLAYICI ---
+    ai_secim = gemini_strateji_al(en_iyi_5, vade_adi)
+    bot.send_message(MY_ID, f"⭐ *EMİR BEY İÇİN ÖZEL SEÇİM*\n\n{ai_secim}", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: True)
-def handle(message):
-    if "fırsat" in message.text.lower():
-        rapor_gonder("1d", "MANUEL TARAMA")
+def manual_handler(message):
+    txt = message.text.upper().strip()
+    if "FIRSAT" in txt:
+        bot.send_message(message.chat.id, "🔍 Tarama başlatıldı...")
+        rapor_hazirla_ve_gonder("1d", "MANUEL TARAMA")
+    elif 2 <= len(txt) <= 6:
+        res = analiz_motoru(txt)
+        if res:
+            ai_notu = gemini_strateji_al([res], "ÖZEL")
+            bot.send_message(message.chat.id, f"📍 *{res['ticker']}*\nFiyat: {res['fiyat']}\n🤖 AI: {ai_notu}", parse_mode="Markdown")
 
-def scheduler_start():
-    schedule.every().monday.to.friday.at("09:55").do(lambda: rapor_gonder("1d", "SABAH AÇILIŞ"))
-    schedule.every().monday.to.friday.at("17:50").do(lambda: rapor_gonder("1d", "AKŞAM KAPANIŞ"))
+def scheduler_loop():
+    # 'monday.to.friday' hatasını günleri tek tek ekleyerek çözüyoruz
+    gunler = [schedule.every().monday, schedule.every().tuesday, 
+              schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
+    
+    for gun in gunler:
+        gun.at("09:55").do(lambda: rapor_hazirla_ve_gonder("1d", "SABAH AÇILIŞ"))
+        gun.at("17:50").do(lambda: rapor_hazirla_ve_gonder("1d", "AKŞAM KAPANIŞ"))
+    
     while True:
         schedule.run_pending()
         time.sleep(30)
 
 if __name__ == "__main__":
-    threading.Thread(target=scheduler_start, daemon=True).start()
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=os.environ.get("PORT", 8080)), daemon=True).start()
-    bot.infinity_polling()
+    # Zamanlayıcıyı başlat
+    threading.Thread(target=scheduler_loop, daemon=True).start()
+    # Flask sunucusunu Railway portuna bağla
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+    # Botu çalıştır
+    print("🚀 Sistem Railway üzerinde başarıyla başlatıldı.")
+    bot.infinity_polling(timeout=20)
