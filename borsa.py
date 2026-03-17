@@ -21,16 +21,16 @@ bot = telebot.TeleBot(TOKEN)
 genai.configure(api_key=GEMINI_KEY)
 ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 147 Hisselik Listeniz ve Fonlar
+# --- LİSTELER ---
 KATILIM_LISTESI = ["AKSA", "ALTNY", "ASELS", "BIMAS", "BSOKE", "CANTE", "CIMSA", "CWENE", "DOAS", "EGEEN", "ENJSA", "EREGL", "FROTO", "GENTS", "GESAN", "GUBRF", "HEKTS", "JANTS", "KCAER", "KONTR", "KONYA", "KORDS", "KOZAL", "MAVI", "MGROS", "MIATK", "OYAKC", "PGSUS", "REEDR", "SASA", "SISE", "SMRTG", "TABGD", "THYAO", "TKFEN", "TMSN", "TOASO", "TUPRS", "ULKER", "VESBE", "YEOTK"]
 FON_LISTESI = ["ALTINS.IS", "ZGOLD.IS", "GMSTR.IS", "GLDGR.IS"]
 
-# MAVİ MENÜYÜ TANIMLA
+# --- MAVİ MENÜ AYARI ---
 def set_commands():
     commands = [
-        telebot.types.BotCommand("gunluk", "Katılım: Günlük Tarama"),
-        telebot.types.BotCommand("ikihaftalik", "Katılım: 2 Haftalık Tarama"),
-        telebot.types.BotCommand("aylik", "Katılım: Aylık Tarama"),
+        telebot.types.BotCommand("gunluk", "Katılım: Günlük"),
+        telebot.types.BotCommand("ikihaftalik", "Katılım: 2 Haftalık"),
+        telebot.types.BotCommand("aylik", "Katılım: Aylık"),
         telebot.types.BotCommand("fonlar", "Altın, Gümüş ve Fonlar"),
         telebot.types.BotCommand("start", "Sistemi Başlat")
     ]
@@ -41,7 +41,6 @@ def analiz_motoru(hisse, donem="1d"):
         ticker = hisse.upper().strip()
         f_t = ticker + ".IS" if not ticker.endswith(".IS") else ticker
         p = "6mo" if donem == "1d" else "2y" if donem == "1wk" else "5y"
-        # Progress=False ve threads=False çakışmayı azaltır
         df = yf.download(f_t, period=p, interval=donem, progress=False, threads=False)
         if df is None or df.empty or len(df) < 15: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -53,9 +52,9 @@ def analiz_motoru(hisse, donem="1d"):
 
 def ai_yorumla(hisse_verileri):
     try:
-        prompt = f"Borsa uzmanı olarak Emir Bey için bu 5 hisseyi yorumla, en iyisini seç: {hisse_verileri}"
+        prompt = f"Borsa uzmanı olarak bu 5 hisseyi yorumla ve Emir Bey'e bir öneri yap: {hisse_verileri}"
         return ai_model.generate_content(prompt).text
-    except: return "⚠️ Yapay zeka şu an meşgul."
+    except: return "⚠️ Analiz şu an yapılamadı."
 
 def rapor_gonder(liste, vade_kod, vade_adi):
     bot.send_message(MY_ID, f"🔍 {vade_adi} tarama başladı...")
@@ -71,15 +70,14 @@ def rapor_gonder(liste, vade_kod, vade_adi):
         ai_data.append(f"{t['ticker']}(%{pot})")
         plt.figure(figsize=(4, 2)); plt.plot(t["df"]["Close"].tail(20).values); plt.axis('off')
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
-        bot.send_photo(MY_ID, buf, caption=f"💎 *{t['ticker']}* | Potansiyel: %{pot}", parse_mode="Markdown")
+        bot.send_photo(MY_ID, buf, caption=f"💎 *{t['ticker']}* | Pot: %{pot}")
         plt.close(); time.sleep(0.5)
 
     if ai_data:
-        bot.send_message(MY_ID, ai_yorumla(ai_data))
+        bot.send_message(MY_ID, "🤖 *Gemini:* " + ai_yorumla(ai_data))
 
 @bot.message_handler(commands=['start'])
-def start(m):
-    bot.send_message(m.chat.id, "📈 Terminal Hazır. Mavi menü butonunu kullanın.")
+def start(m): bot.send_message(m.chat.id, "📈 Terminal Hazır. Mavi menüyü kullanın.")
 
 @bot.message_handler(commands=['gunluk'])
 def cmd_1(m): rapor_gonder(KATILIM_LISTESI, "1d", "GÜNLÜK")
@@ -94,12 +92,9 @@ def cmd_3(m): rapor_gonder(KATILIM_LISTESI, "1mo", "AYLIK")
 def cmd_4(m): rapor_gonder(FON_LISTESI, "1d", "FON/ALTIN")
 
 if __name__ == "__main__":
-    # --- KRİTİK ÇÖZÜM: Eski Webhook ve Bağlantıları Zorla Temizle ---
+    # ÇATIŞMAYI ÖNLEYİCİ SATIRLAR
     requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True")
-    time.sleep(1)
-    
+    time.sleep(2)
     set_commands()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=os.environ.get("PORT", 8080)), daemon=True).start()
-    
-    # infinity_polling kullanarak kopmaları engelle
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    bot.infinity_polling(timeout=15, long_polling_timeout=5)
