@@ -19,7 +19,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# --- 1. AYARLAR VE FLASK ---
+# --- 1. FLASK SERVER ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -38,11 +38,13 @@ MY_CHAT_ID = os.environ.get("MY_CHAT_ID")
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "borsa_verileri.json"
 
-# --- 2. LİSTE VE VERİ YÖNETİMİ ---
+# --- 2. LİSTE VE JSON ---
 GRUPLAR = {
-    "katilim": ["ASTOR.IS", "BIMAS.IS", "CANTE.IS", "EGEEN.IS", "ENJSA.IS", "FROTO.IS", "HEKTS.IS", "KONTR.IS", "THYAO.IS", "YEOTK.IS"],
-    "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"],
-    "altin": ["ALTINS.IS", "ZGOLD.IS", "GMSTR.IS", "GLDGR.IS"]
+    "katilim": [],
+    "bist30": [],
+    "bist50": [],
+    "bist100": [],
+    "altin": []
 }
 
 def listeleri_yonet():
@@ -52,62 +54,66 @@ def listeleri_yonet():
         return GRUPLAR
     with open(DATA_FILE, "r") as f: return json.load(f)["lists"]
 
-# --- Katılım Excel çekme ve JSON güncelleme ---
+# --- 3. KATILIM GÜNCELLEME ---
 def katilim_tum_guncelle():
     print("📥 Katılım Tüm Excel indiriliyor...")
     try:
         url = "https://www.borsaistanbul.com/files/endeksler/XKTUM_Endeks_Bilesenleri.xlsx"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                 "(KHTML, like Gecko) Chrome/116.0 Safari/537.36"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
-
-        with open("katilim.xlsx", "wb") as f: f.write(r.content)
-
-        df = pd.read_excel("katilim.xlsx")
-        hisseler = []
-        for col in df.columns:
-            if "KOD" in col.upper():
-                hisseler = df[col].dropna().tolist()
-                break
-        hisseler = [str(h).strip() + ".IS" for h in hisseler if len(str(h)) <= 6]
-
-        if len(hisseler) < 10:
-            print("⚠️ Liste boş geldi, eski veri korunuyor")
-            return False
-
+        dosya = "katilim.xlsx"
+        with open(dosya, "wb") as f: f.write(r.content)
+        df = pd.read_excel(dosya)
+        kod_kolon = [c for c in df.columns if "KOD" in str(c).upper()]
+        if not kod_kolon:
+            print("⚠️ Excel’de 'KOD' kolonu bulunamadı! Liste boş bırakılıyor.")
+            hisseler = []
+        else:
+            hisseler = df[kod_kolon[0]].dropna().tolist()
+            hisseler = [str(h).strip() + ".IS" for h in hisseler if len(str(h)) <= 6]
+        print("Excel'den gelen Katılım hisseleri:", hisseler)
+        if len(hisseler) < 10: return False
         aktif = listeleri_yonet()
         aktif["katilim"] = hisseler
-
-        with open(DATA_FILE, "w") as f:
-            json.dump({"last_update": time.time(), "lists": aktif}, f)
-
-        if os.path.exists("katilim.xlsx"): os.remove("katilim.xlsx")
-        print(f"✅ {len(hisseler)} katılım hissesi güncellendi")
+        with open(DATA_FILE, "w") as f: json.dump({"last_update": time.time(), "lists": aktif}, f)
+        if os.path.exists(dosya): os.remove(dosya)
+        print(f"✅ {len(hisseler)} Katılım hissesi güncellendi")
         return True
     except Exception as e:
         print("❌ Katılım güncelleme hatası:", e)
         return False
 
-def listeleri_internetten_guncelle():
-    print("🌐 Diğer listeler internetten güncelleniyor...")
+# --- 4. DİĞER ENDEKSLER (BIST30/50/100, ALTIN) ---
+def endeks_tum_guncelle(endeks_adi, url, kolon_keyword="KOD"):
+    print(f"📥 {endeks_adi.upper()} Excel indiriliyor...")
     try:
-        url = "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/temel-veriler.aspx"
-        r = requests.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        cekilen = [tag.text.strip() + ".IS" for tag in soup.find_all('th') if 2 <= len(tag.text.strip()) <= 6]
-        if len(cekilen) > 50:
-            aktif = listeleri_yonet()
-            aktif["bist100"] = cekilen[:100]
-            aktif["bist30"] = cekilen[:30]
-            with open(DATA_FILE, "w") as f: json.dump({"last_update": time.time(), "lists": aktif}, f)
-            print("✅ Listeler başarıyla güncellendi.")
-            return True
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
+        dosya = f"{endeks_adi}.xlsx"
+        with open(dosya, "wb") as f: f.write(r.content)
+        df = pd.read_excel(dosya)
+        kod_kolon = [c for c in df.columns if kolon_keyword in str(c).upper()]
+        if not kod_kolon:
+            print(f"⚠️ Excel’de '{kolon_keyword}' kolonu bulunamadı! Liste boş bırakılıyor.")
+            hisseler = []
+        else:
+            hisseler = df[kod_kolon[0]].dropna().tolist()
+            hisseler = [str(h).strip() + ".IS" for h in hisseler if len(str(h)) <= 6]
+        print(f"{endeks_adi.upper()} Excel'den gelen hisseler:", hisseler)
+        if len(hisseler) < 5: return False
+        aktif = listeleri_yonet()
+        aktif[endeks_adi] = hisseler
+        with open(DATA_FILE, "w") as f: json.dump({"last_update": time.time(), "lists": aktif}, f)
+        if os.path.exists(dosya): os.remove(dosya)
+        print(f"✅ {endeks_adi.upper()} listesi güncellendi ({len(hisseler)} hisse)")
+        return True
     except Exception as e:
-        print(f"❌ Güncelleme hatası: {e}")
+        print(f"❌ {endeks_adi.upper()} güncelleme hatası:", e)
         return False
 
-# --- 3. ANALİZ, SKORLAMA VE GEMINI ---
+# --- 5. ANALİZ ---
 def gemini_yorumu_ekle(ticker, rsi, fiyat, ema9, upper_bb, donem):
     alim = round(ema9, 2)
     strateji = f"\n💡 *Strateji:* {alim} desteği takip edilebilir." if donem != "sabah" else f"\n🚀 *Strateji:* {fiyat} üstü kalıcılık pozitif."
@@ -119,7 +125,9 @@ def gemini_yorumu_ekle(ticker, rsi, fiyat, ema9, upper_bb, donem):
 def hisse_skorla(ticker, donem="manuel"):
     try:
         ticker = str(ticker).strip().upper().replace("/", "")
-        if not any(x in ticker for x in [".IS", "=", "-"]): ticker += ".IS"
+        # Spot emtia kontrolü
+        if not any(x in ticker for x in [".IS", "=", "-"]):
+            if ticker not in ["GLDTR", "ALTIN1GOLD"]: ticker += ".IS"
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
         if df.empty or len(df) < 20: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -132,9 +140,11 @@ def hisse_skorla(ticker, donem="manuel"):
         fiyat, rsi = float(last["Close"]), float(last["RSI"])
         skor = (1 if fiyat > float(last["EMA9"]) else 0) + (2 if 40 < rsi < 65 else 0)
         karar = "🔥 GÜÇLÜ" if skor >= 3 else "📈 OLUMLU" if skor >= 1 else "⚖️ NÖTR"
-        return {"ticker": ticker, "fiyat": fiyat, "rsi": rsi, "upper_bb": float(last["BB_U"]),
-                "ema21": float(last["EMA21"]), "ema9": float(last["EMA9"]),
-                "karar": karar, "df": df, "yorum": gemini_yorumu_ekle(ticker, rsi, fiyat, float(last["EMA9"]), float(last["BB_U"]), donem)}
+        return {
+            "ticker": ticker, "fiyat": fiyat, "rsi": rsi, "upper_bb": float(last["BB_U"]),
+            "ema21": float(last["EMA21"]), "ema9": float(last["EMA9"]),
+            "karar": karar, "df": df, "yorum": gemini_yorumu_ekle(ticker, rsi, fiyat, float(last["EMA9"]), float(last["BB_U"]), donem)
+        }
     except: return None
 
 def sonuc_gonder(chat_id, t):
@@ -150,7 +160,7 @@ def sonuc_gonder(chat_id, t):
         plt.close("all")
     except: pass
 
-# --- 4. ZAMANLAYICI ---
+# --- 6. ZAMANLAYICI ---
 def seans_raporu(donem):
     aktif = listeleri_yonet()
     bot.send_message(MY_CHAT_ID, f"📢 **RAPOR: {donem.upper()}**", parse_mode="Markdown")
@@ -159,18 +169,23 @@ def seans_raporu(donem):
         if res and res["karar"] in ["🔥 GÜÇLÜ", "📈 OLUMLU"]: sonuc_gonder(MY_CHAT_ID, res)
 
 def zamanlayici():
-    def donemsel_kontrol():
-        simdi = datetime.now()
-        if simdi.day == 1 and simdi.month in [1, 4, 7, 10]:
-            listeleri_internetten_guncelle()
-        katilim_tum_guncelle()
-
-    schedule.every().day.at("08:00").do(donemsel_kontrol)
+    # Günlük katılım endeksi
     schedule.every().day.at("08:30").do(katilim_tum_guncelle)
 
+    # Çeyrek başı endeks güncellemesi
+    def uc_aylik_guncelleme():
+        simdi = datetime.now()
+        if simdi.day == 1 and simdi.month in [1,4,7,10]:
+            endeks_tum_guncelle("bist30", "https://www.borsaistanbul.com/files/endeksler/XBIST30_Endeks_Bilesenleri.xlsx")
+            endeks_tum_guncelle("bist50", "https://www.borsaistanbul.com/files/endeksler/XBIST50_Endeks_Bilesenleri.xlsx")
+            endeks_tum_guncelle("bist100", "https://www.borsaistanbul.com/files/endeksler/XBIST100_Endeks_Bilesenleri.xlsx")
+            endeks_tum_guncelle("altin", "https://www.borsaistanbul.com/files/endeksler/XALTIN_Endeks_Bilesenleri.xlsx")
+
+    schedule.every().day.at("08:00").do(uc_aylik_guncelleme)
+
+    # Seans raporları
     is_gunleri = [schedule.every().monday, schedule.every().tuesday, 
                   schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
-
     for gun in is_gunleri:
         gun.at("09:55").do(seans_raporu, "sabah")
         gun.at("18:05").do(seans_raporu, "aksam")
@@ -180,7 +195,7 @@ def zamanlayici():
         schedule.run_pending()
         time.sleep(30)
 
-# --- 5. MESAJ YÖNETİMİ ---
+# --- 7. TELEGRAM MESAJ YÖNETİMİ ---
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     metin = message.text.strip().replace("/", "").lower()
@@ -198,9 +213,9 @@ def handle_text(message):
         if res: sonuc_gonder(message.chat.id, res)
         else: bot.send_message(message.chat.id, "❌ Veri alınamadı.")
 
+# --- 8. PROGRAM BAŞLANGICI ---
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=zamanlayici, daemon=True).start()
-
     print("🚀 Sistem Hazır! Port 8080 aktif.")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
