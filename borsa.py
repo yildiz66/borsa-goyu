@@ -19,7 +19,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# --- 1. YAPILANDIRMA VE FLASK (CANLI TUTMA) ---
+# --- 1. AYARLAR VE FLASK ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,20 +29,18 @@ def home():
 def run_web_server():
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
-# API Anahtarları (Environment Variables üzerinden çekilir)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.environ.get("MY_CHAT_ID")
 DATA_FILE = "borsa_verileri.json"
 bot = telebot.TeleBot(TOKEN)
 
-# Başlangıç Listeleri
 VARSAYILAN_GRUPLAR = {
     "katilim": ["ASTOR.IS", "BIMAS.IS", "CANTE.IS", "EGEEN.IS", "ENJSA.IS", "FROTO.IS", "HEKTS.IS", "KONTR.IS", "THYAO.IS", "YEOTK.IS"],
     "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"],
     "bist100": ["SASA.IS", "HEKTS.IS", "KOZAL.IS", "DOAS.IS", "AKSA.IS", "MIATK.IS"]
 }
 
-# --- 2. VERİ VE LİSTE YÖNETİMİ ---
+# --- 2. LİSTE YÖNETİMİ ---
 def listeleri_yonet():
     if not os.path.exists(DATA_FILE):
         data = {"last_update": time.time(), "lists": VARSAYILAN_GRUPLAR}
@@ -57,7 +55,6 @@ def listeleri_internetten_guncelle():
         r = requests.get(url, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         cekilen = [tag.text.strip() + ".IS" for tag in soup.find_all('th') if 2 <= len(tag.text.strip()) <= 6]
-        
         if len(cekilen) > 50:
             aktif = listeleri_yonet()
             aktif["bist100"] = cekilen[:100]
@@ -67,31 +64,32 @@ def listeleri_internetten_guncelle():
             return True
     except: return False
 
-# --- 3. ANALİZ VE SKORLAMA MOTORU ---
+# --- 3. ANALİZ MOTORU ---
 def analiz_et(ticker, donem="günlük"):
     try:
-        # Periyoda göre veri ayarı
+        # GEÇERSİZ KELİME FİLTRESİ (Loglardaki 404 hatalarını bu engeller)
+        ticker = str(ticker).strip().upper().replace("/", "")
+        gecersizler = ["KATILIM", "GÜNLÜK", "AYLIK", "HAFTA", "BIST30", "BIST100", "FIRSAT"]
+        if ticker in gecersizler or len(ticker) < 2: 
+            return None
+
+        if not any(x in ticker for x in [".IS", "=", "-"]): ticker += ".IS"
+
         interval = "1d"; period = "6mo"
         if "hafta" in donem.lower(): interval = "1wk"; period = "2y"
         if "ay" in donem.lower(): interval = "1mo"; period = "5y"
 
         df = yf.download(ticker, period=period, interval=interval, progress=False)
-        if df.empty or len(df) < 20: return None
-        
-        # MultiIndex sütun düzeltme
+        if df.empty or len(df) < 10: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
-        # Teknik İndikatörler
         df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
         df["EMA9"] = ta.trend.ema_indicator(df["Close"], window=9)
         df["EMA21"] = ta.trend.ema_indicator(df["Close"], window=21)
         df["BB_U"] = ta.volatility.bollinger_hband(df["Close"])
         
         last = df.iloc[-1]
-        fiyat = float(last["Close"])
-        rsi = float(last["RSI"])
-        
-        # Basit Skorlama
+        fiyat, rsi = float(last["Close"]), float(last["RSI"])
         skor = (1 if fiyat > float(last["EMA9"]) else 0) + (2 if 40 < rsi < 65 else 0)
         karar = "🔥 GÜÇLÜ" if skor >= 3 else "📈 OLUMLU" if skor >= 1 else "⚖️ NÖTR"
         
@@ -109,53 +107,37 @@ def sonuc_gonder(chat_id, t):
                  f"---------------------------\n"
                  f"💰 *Fiyat:* `{round(t['fiyat'], 2)}` | *RSI:* `{round(t['rsi'], 1)}`\n"
                  f"🏁 *Karar:* `{t['karar']}`\n"
-                 f"🟢 *Destek (EMA9):* `{round(t['ema9'], 2)}` \n"
+                 f"🟢 *Destek:* `{round(t['ema9'], 2)}` \n"
                  f"🎯 *Hedef:* `{round(t['upper_bb'], 2)}` (%{p_kar})\n"
-                 f"🛑 *Stop (EMA21):* `{round(t['ema21'], 2)}` \n"
-                 f"---------------------------\n"
-                 f"💡 *Strateji:* EMA9 üstünde kalıcılık yükselişi tetikleyebilir.")
+                 f"---------------------------")
 
         plt.figure(figsize=(8, 4))
-        plt.plot(t["df"]["Close"].tail(35).values, label="Fiyat", color="blue")
-        plt.title(f"{t['ticker']} Teknik Görünüm")
+        plt.plot(t["df"]["Close"].tail(35).values, color="blue")
+        plt.title(f"{t['ticker']} - {t['donem']}")
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
         bot.send_photo(chat_id, buf, caption=mesaj, parse_mode="Markdown")
         plt.close("all")
     except: pass
 
-# --- 4. OTOMATİK RAPOR VE ZAMANLAYICI ---
+# --- 4. ZAMANLAYICI ---
 def seans_raporu(tip):
     aktif = listeleri_yonet()
-    bot.send_message(MY_CHAT_ID, f"📢 **{tip.upper()} SEANS RAPORU BAŞLADI**", parse_mode="Markdown")
-    # Sadece Katılım grubundaki güçlüleri raporla
+    bot.send_message(MY_CHAT_ID, f"📢 **{tip.upper()} SEANS RAPORU**", parse_mode="Markdown")
     for h in aktif.get("katilim", []):
         res = analiz_et(h)
         if res and res["karar"] in ["🔥 GÜÇLÜ", "📈 OLUMLU"]:
             sonuc_gonder(MY_CHAT_ID, res)
 
 def zamanlayici_dongusu():
-    # Hafta içi raporları
     is_gunleri = [schedule.every().monday, schedule.every().tuesday, schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
-    
     for gun in is_gunleri:
-        gun.at("09:55").do(seans_raporu, "Sabah Açılış")
-        gun.at("18:05").do(seans_raporu, "Akşam Kapanış")
-    
-    # Her Pazar akşamı haftalık hazırlık
-    schedule.every().sunday.at("21:00").do(seans_raporu, "Haftalık Hazırlık")
-
+        gun.at("09:55").do(seans_raporu, "Sabah")
+        gun.at("18:05").do(seans_raporu, "Akşam")
     while True:
         schedule.run_pending()
         time.sleep(30)
 
-# --- 5. MESAJ YÖNETİMİ VE MENÜ ---
-@bot.message_handler(commands=['start'])
-def welcome(message):
-    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add("Katılım Günlük", "Katılım 2 Hafta", "Katılım Aylık")
-    markup.add("Bist 30 Fırsat", "Bist 100 Fırsat")
-    bot.send_message(message.chat.id, "📊 Emir Bey, Borsa Terminali Aktif!", reply_markup=markup)
-
+# --- 5. MESAJ YÖNETİMİ ---
 @bot.message_handler(func=lambda message: True)
 def handle_all(message):
     txt = message.text.lower()
@@ -167,36 +149,35 @@ def handle_all(message):
     if "hafta" in txt: donem = "haftalık"
     elif "ay" in txt: donem = "aylık"
 
-    # Liste Taraması
+    # Liste Tespiti
     anahtar = None
     if "katilim" in txt: anahtar = "katilim"
-    elif "bist 30" in txt or "bist30" in txt: anahtar = "bist30"
-    elif "bist 100" in txt or "bist100" in txt: anahtar = "bist100"
+    elif "bist30" in txt or "bist 30" in txt: anahtar = "bist30"
+    elif "bist100" in txt or "bist 100" in txt: anahtar = "bist100"
 
     if anahtar:
-        bot.send_message(cid, f"🔍 {anahtar.upper()} {donem} periyodunda taranıyor...")
+        bot.send_message(cid, f"🔍 {anahtar.upper()} {donem} taranıyor...")
         for h in aktif_listeler.get(anahtar, []):
             res = analiz_et(h, donem)
-            # Manuel istekte sadece 'fırsat' (güçlü/olumlu) olanları gönder
-            if res and ("fırsat" in txt or res["karar"] != "⚖️ NÖTR"):
+            # Sadece Nötr olmayanları veya 'fırsat' istenmişse hepsini gönder
+            if res and (res["karar"] != "⚖️ NÖTR" or "fırsat" in txt):
                 sonuc_gonder(cid, res)
-        bot.send_message(cid, "✅ Tarama tamamlandı.")
+        bot.send_message(cid, "✅ Tarama bitti.")
     else:
-        # Tekil Hisse Analizi
-        hisse = txt.upper().replace("/", "")
-        if not hisse.endswith(".IS"): hisse += ".IS"
+        # TEKİL HİSSE AYIKLAMA (Boşlukları temizle, sadece ilk kelimeyi al)
+        hisse = txt.split()[0].upper().replace("/", "")
         res = analiz_et(hisse, donem)
-        if res: sonuc_gonder(cid, res)
-        else: bot.send_message(cid, "❌ Hisse bulunamadı veya veri çekilemedi.")
+        if res:
+            sonuc_gonder(cid, res)
+        else:
+            # Sadece butona basıldığında çıkan gereksiz uyarıyı engellemek için filtre
+            if len(hisse) <= 6:
+                bot.send_message(cid, "❌ Veri alınamadı veya geçersiz komut.")
 
 # --- 6. ANA ÇALIŞTIRICI ---
 if __name__ == "__main__":
-    # İnternetten listeleri çek (İlk açılışta)
     listeleri_internetten_guncelle()
-    
-    # Threading başlatma
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=zamanlayici_dongusu, daemon=True).start()
-
-    print("🚀 Sistem Aktif! Port 8080 üzerinden izleniyor.")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    print("🚀 Sistem Hazır! Port 8080 aktif.")
+    bot.infinity_polling(timeout=20)
