@@ -1,12 +1,9 @@
 pyTelegramBotAPI
 yfinance
 ta
-matplotlib
 pandas
-openpyxl
-beautifulsoup4
-lxml
+numpy
+scikit-learn
+google-generativeai
 flask
-gunicorn
-schedule
-requests
+matplotlib
