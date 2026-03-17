@@ -4,9 +4,10 @@ ta
 pandas
 numpy
 scikit-learn
-google-generativeai
+
 flask
 matplotlib
 schedule
 requests
 beautifulsoup4
+google-genai
