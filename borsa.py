@@ -19,22 +19,17 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# --- 1. AYARLAR VE FLASK ---
+# --- 1. AYARLAR VE FLASK (RAILWAY UYUMLU) ---
 app = Flask(__name__)
 
-# UptimeRobot'un ana dizine yaptığı istekleri karşılamak için:
 @app.route('/')
 def home(): 
-    return "Bot Calisiyor! (Ana Dizin)", 200
-
-# Mevcut api rotanız (kalabilir):
-@app.route('/api')
-def health_check(): 
-    return "Sistem Aktif (API)", 200
+    return "Bot Calisiyor! (Railway)", 200
 
 def run_web_server():
-    # Replit için 0.0.0.0 ve 8080 portu doğru yapılandırma
-    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+    # Railway'in atadığı PORT'u alıyoruz
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.environ.get("MY_CHAT_ID")
@@ -43,9 +38,8 @@ DATA_FILE = "borsa_verileri.json"
 
 # İlk Kurulum Listeleri
 GRUPLAR = {
-    "katilim": ["ASTOR.IS", "BIMAS.IS", "CANTE.IS", "EGEEN.IS", "ENJSA.IS", "FROTO.IS", "HEKTS.IS", "KONTR.IS", "THYAO.IS", "YEOTK.IS"],
-    "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"],
-    "altin": ["ALTINS.IS", "ZGOLD.IS", "GMSTR.IS", "GLDGR.IS"]
+    "katilim": ["ASTOR.IS", "BIMAS.IS", "THYAO.IS"], # İlk kurulum için, sonra güncellenecek
+    "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"]
 }
 
 # --- 2. LİSTE VE VERİ YÖNETİMİ ---
@@ -56,34 +50,39 @@ def listeleri_yonet():
         return GRUPLAR
     with open(DATA_FILE, "r") as f: return json.load(f)["lists"]
 
-def listeleri_internetten_guncelle():
-    print("🌐 Listeler internetten güncelleniyor...")
+def katilim_listesini_guncelle():
+    print("🌐 Tüm Katılım Endeksi (XKTUM) listesi güncelleniyor...")
     try:
-        url = "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/temel-veriler.aspx"
-        r = requests.get(url, timeout=15)
+        url = "https://www.getmidas.com/canli-borsa/katilim-endeksi-hisseleri/"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        r = requests.get(url, headers=headers, timeout=20)
         soup = BeautifulSoup(r.text, 'html.parser')
-        cekilen = [tag.text.strip() + ".IS" for tag in soup.find_all('th') if 2 <= len(tag.text.strip()) <= 6]
-
+        
+        cekilen = []
+        for td in soup.find_all('td'):
+            kod = td.text.strip()
+            if 3 <= len(kod) <= 6 and kod.isupper() and kod.isalpha():
+                cekilen.append(kod + ".IS")
+        
         if len(cekilen) > 50:
             aktif = listeleri_yonet()
-            aktif["bist100"] = cekilen[:100]
-            aktif["bist30"] = cekilen[:30]
+            aktif["katilim"] = sorted(list(set(cekilen)))
             with open(DATA_FILE, "w") as f:
                 json.dump({"last_update": time.time(), "lists": aktif}, f)
-            print("✅ Listeler başarıyla güncellendi.")
+            print(f"✅ {len(aktif['katilim'])} katılım hissesi başarıyla güncellendi.")
             return True
     except Exception as e:
-        print(f"❌ Güncelleme hatası: {e}")
+        print(f"❌ Katılım listesi çekilemedi: {e}")
         return False
 
 # --- 3. ANALİZ VE SKORLAMA ---
 def gemini_yorumu_ekle(ticker, rsi, fiyat, ema9, upper_bb, donem):
     alim = round(ema9, 2)
     strateji = f"\n💡 *Strateji:* {alim} desteği takip edilebilir." if donem != "sabah" else f"\n🚀 *Strateji:* {fiyat} üstü kalıcılık pozitif."
-    if rsi < 32: return f"\n💎 **Gemini:** Hisse dipte, toplama bölgesi.{strateji}"
-    elif rsi > 72 or fiyat >= upper_bb: return f"\n⚠️ **Gemini:** Doyumda, kâr alımı uygun olabilir.{strateji}"
-    elif fiyat > ema9: return f"\n📈 **Gemini:** Trend yukarı canlı duruyor.{strateji}"
-    else: return f"\n⚖️ **Gemini:** Güç topluyor, destek beklenmeli.{strateji}"
+    if rsi < 32: return f"\n💎 **Analiz:** Hisse dipte, toplama bölgesi.{strateji}"
+    elif rsi > 72 or fiyat >= upper_bb: return f"\n⚠️ **Analiz:** Doyumda, kâr alımı uygun olabilir.{strateji}"
+    elif fiyat > ema9: return f"\n📈 **Analiz:** Trend yukarı canlı duruyor.{strateji}"
+    else: return f"\n⚖️ **Analiz:** Güç topluyor, destek beklenmeli.{strateji}"
 
 def hisse_skorla(ticker, donem="manuel"):
     try:
@@ -120,37 +119,42 @@ def sonuc_gonder(chat_id, t):
                  f"---------------------------\n🟢 *Destek (EMA9):* `{round(t['ema9'], 2)}` \n🎯 *Hedef:* `{round(t['upper_bb'], 2)}` (%{p_kar})\n"
                  f"🛑 *Stop (EMA21):* `{round(t['ema21'], 2)}` (%{risk})\n---------------------------\n{t['yorum']}")
 
-        plt.figure(figsize=(7, 4)); plt.plot(t["df"]["Close"].tail(30).values, color="blue", linewidth=2)
+        plt.figure(figsize=(7, 4))
+        plt.plot(t["df"]["Close"].tail(30).values, color="blue", linewidth=2)
+        plt.title(f"{t['ticker']} Son 30 Gün")
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
         bot.send_photo(chat_id, buf, caption=mesaj, parse_mode="Markdown")
         plt.close("all")
     except: pass
 
-# --- 4. ZAMANLAYICI (HATA DÜZELTİLDİ) ---
+# --- 4. ZAMANLAYICI ---
 def seans_raporu(donem):
     aktif = listeleri_yonet()
-    bot.send_message(MY_CHAT_ID, f"📢 **RAPOR: {donem.upper()}**", parse_mode="Markdown")
-    for h in aktif.get("katilim", []):
+    hisseler = aktif.get("katilim", [])
+    bot.send_message(MY_CHAT_ID, f"📢 **TARAMA BAŞLADI: {len(hisseler)} Hisse ({donem.upper()})**")
+    
+    bulunan = 0
+    for h in hisseler:
         res = hisse_skorla(h, donem)
-        if res and res["karar"] in ["🔥 GÜÇLÜ", "📈 OLUMLU"]: sonuc_gonder(MY_CHAT_ID, res)
+        if res and res["karar"] in ["🔥 GÜÇLÜ"]: # Çok hisse olduğu için sadece en güçlüleri gönderir
+            sonuc_gonder(MY_CHAT_ID, res)
+            bulunan += 1
+            time.sleep(1.5) # Railway ve Yahoo ban koruması
+    
+    bot.send_message(MY_CHAT_ID, f"✅ Tarama bitti. {bulunan} adet güçlü sinyal bulundu.")
 
 def zamanlayici():
-    def donemsel_kontrol():
-        simdi = datetime.now()
-        if simdi.day == 1 and simdi.month in [1, 4, 7, 10]:
-            listeleri_internetten_guncelle()
+    # Başlangıçta listeyi bir kez güncelle
+    katilim_listesini_guncelle()
 
-    schedule.every().day.at("08:00").do(donemsel_kontrol)
+    schedule.every().day.at("08:00").do(katilim_listesini_guncelle)
 
-    # Hafta içi günleri tek tek tanımlayarak TypeError'u önledik
     is_gunleri = [schedule.every().monday, schedule.every().tuesday, 
                   schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
 
     for gun in is_gunleri:
         gun.at("09:55").do(seans_raporu, "sabah")
         gun.at("18:05").do(seans_raporu, "aksam")
-
-    schedule.every().sunday.at("21:00").do(seans_raporu, "pazar")
 
     while True:
         schedule.run_pending()
@@ -160,27 +164,23 @@ def zamanlayici():
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     metin = message.text.strip().replace("/", "").lower()
-    temiz_metin = metin.replace("tum_", "") # tum_bist30 -> bist30 yapar
-
     aktif_listeler = listeleri_yonet()
 
-    if temiz_metin in aktif_listeler:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} listesi taranıyor...")
-        for h in aktif_listeler[temiz_metin]:
+    if metin in aktif_listeler:
+        bot.send_message(message.chat.id, f"🔍 {metin.upper()} listesi taranıyor (Sadece Güçlüler)...")
+        for h in aktif_listeler[metin]:
             res = hisse_skorla(h)
-            if res: sonuc_gonder(message.chat.id, res)
-        bot.send_message(message.chat.id, "✅ Tarama bitti.")
+            if res and res["karar"] == "🔥 GÜÇLÜ":
+                sonuc_gonder(message.chat.id, res)
+                time.sleep(1)
+        bot.send_message(message.chat.id, "✅ İşlem tamamlandı.")
     else:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} analiz ediliyor...")
         res = hisse_skorla(metin)
         if res: sonuc_gonder(message.chat.id, res)
-        else: bot.send_message(message.chat.id, "❌ Veri alınamadı.")
+        else: bot.send_message(message.chat.id, "❌ Hisse bulunamadı veya veri hatası.")
 
 if __name__ == "__main__":
-    # Flask ve Zamanlayıcıyı ayrı kanallarda başlat
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=zamanlayici, daemon=True).start()
-
-    print("🚀 Sistem Hazır! Port 8080 aktif.")
-    # infinity_polling ile botun kopmasını engelle
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    print("🚀 Railway Sistemi Hazır!")
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
