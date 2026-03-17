@@ -3,8 +3,10 @@ yfinance
 ta
 matplotlib
 pandas
+openpyxl
 beautifulsoup4
+lxml
 flask
+gunicorn
 schedule
 requests
-pdfplumber
