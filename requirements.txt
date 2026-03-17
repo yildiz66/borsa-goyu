@@ -1,9 +1,7 @@
 pyTelegramBotAPI
 yfinance
-pandas
 pandas_ta
-google.generativeai 
 matplotlib
-schedule
+google-generativeai
 flask
-gunicorn
+requests
