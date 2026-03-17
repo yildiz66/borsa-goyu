@@ -1,9 +1,9 @@
 pyTelegramBotAPI
 yfinance
-pandas
-matplotlib
 ta
-schedule
-requests
+matplotlib
+pandas
 beautifulsoup4
 flask
+schedule
+requests
