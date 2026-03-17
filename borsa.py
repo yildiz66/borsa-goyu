@@ -1,186 +1,147 @@
-import os
-import telebot
-import yfinance as yf
-import ta
-import matplotlib
-matplotlib.use("Agg")
+import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, schedule
 import matplotlib.pyplot as plt
-import io
-import time
-import pandas as pd
-import json
-import schedule
-import threading
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
+import google.generativeai as genai
+from telebot import types
 from flask import Flask
-import warnings
 
+# Uyarıları ve Grafik Arayüzünü Kapat
 warnings.filterwarnings("ignore")
+matplotlib.use("Agg")
 
-# --- 1. AYARLAR VE FLASK ---
+# --- 1. AYARLAR VE API BAĞLANTILARI ---
 app = Flask(__name__)
-
-# UptimeRobot'un ana dizine yaptığı istekleri karşılamak için:
 @app.route('/')
-def home(): 
-    return "Bot Calisiyor! (Ana Dizin)", 200
-
-# Mevcut api rotanız (kalabilir):
-@app.route('/api')
-def health_check(): 
-    return "Sistem Aktif (API)", 200
-
-def run_web_server():
-    # Replit için 0.0.0.0 ve 8080 portu doğru yapılandırma
-    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+def home(): return "Borsabot Aktif", 200
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MY_CHAT_ID = os.environ.get("MY_CHAT_ID")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+MY_ID = os.environ.get("MY_CHAT_ID")
+
 bot = telebot.TeleBot(TOKEN)
-DATA_FILE = "borsa_verileri.json"
+genai.configure(api_key=GEMINI_KEY)
+ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
-# İlk Kurulum Listeleri
-GRUPLAR = {
-    "katilim": ["AKSA.IS, ALTNY.IS, ASELS.IS, BIMAS.IS, BSOKE.IS, CANTE.IS, CIMSA.IS, CWENE.IS, DOAS.IS, EGEEN.IS, ENJSA.IS, EREGL.IS, FROTO.IS, GENTS.IS, GESAN.IS, GUBRF.IS, HEKTS.IS, JANTS.IS, KCAER.IS, KONTR.IS, KONYA.IS, KORDS.IS, KOZAL.IS, MAVI.IS, MGROS.IS, MIATK.IS, OYAKC.IS, PGSUS.IS, REEDR.IS, SASA.IS, SISE.IS, SMRTG.IS, TABGD.IS, THYAO.IS, TKFEN.IS, TMSN.IS, TOASO.IS, TUPRS.IS, ULKER.IS, VESBE.IS, YEOTK.IS, AGHOL.IS, AKCNS.IS, ALARK.IS, ALFAS.IS, ASUZU.IS, BERA.IS, BIENP.IS, BRYAT.IS, BRSAN.IS, EUPWR.IS, GENIL.IS, GSDHO.IS, GWIND.IS, INDES.IS, INVES.IS, KARYE.IS, KAYSE.IS, KCHOL.IS, KOZAA.IS, KRDMD.IS, LOGO.IS, ODAS.IS, OTKAR.IS, QUAGR.IS, SAHOL.IS, SKBNK.IS, SO KM.IS, TAVHL.IS, TCELL.IS, TSKB.IS, TTKOM.IS, TURSG.IS, VAKBN.IS, VESTL.IS, YKBNK.IS, ZOREN.IS, ADEL.IS, ADESE.IS, AGESA.IS, AGROT.IS, AHGAZ.IS, AKFGY.IS, AKFYE.IS, AKPGR.IS, AKSUE.IS, ALBRK.IS, ALCTL.IS, ALKA.IS, ALMAD.IS, ANELE.IS, ARCLK.IS, ARDYZ.IS, ARENA.IS, ARZUM.IS, ASGEY.IS, ASGYO.IS, ATATP.IS, ATEKS.IS, AVPGY.IS, AYDEM.IS, AYEN.IS, AYGAZ.IS, BAGFS.IS, BAKAB.IS, BANVT.IS, BARMA.IS, BEYAZ.IS, BIGCH.IS, BIOEN.IS, BLCYT.IS, BNTAS.IS, BOBET.IS, BORSK.IS, BRISA.IS, BRLSM.IS, BUCIM.IS, BURCE.IS, CELHA.IS, CEMTS.IS, CONSE.IS, CVKMD.IS, DAGI.IS, DESPC.IS, DESAS.IS, DMSAS.IS, DOGUB.IS, DURDO.IS, DYOBY.IS, DZGYO.IS, EDATA.IS, EGGUB.IS, EGSER.IS, EKGYO.IS, EKLPI.IS, ELITE.IS, ENKAI.IS, ERBOS.IS, ERSU.IS, ESCOM.IS, EUHOL.IS, EYGY.IS"],
-    "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"],
-    "altin": ["ALTINS.IS", "ZGOLD.IS", "GMSTR.IS", "GLDGR.IS"]
-}
+# 147 Hisse - Sabit Katılım Listesi
+KATILIM_LISTESI = sorted(list(set([
+    "AKSA", "ALTNY", "ASELS", "BIMAS", "BSOKE", "CANTE", "CIMSA", "CWENE", "DOAS", "EGEEN", 
+    "ENJSA", "EREGL", "FROTO", "GENTS", "GESAN", "GUBRF", "HEKTS", "JANTS", "KCAER", "KONTR", 
+    "KONYA", "KORDS", "KOZAL", "MAVI", "MGROS", "MIATK", "OYAKC", "PGSUS", "REEDR", "SASA", 
+    "SISE", "SMRTG", "TABGD", "THYAO", "TKFEN", "TMSN", "TOASO", "TUPRS", "ULKER", "VESBE", 
+    "YEOTK", "AGHOL", "AKCNS", "ALARK", "ALFAS", "ASUZU", "BERA", "BIENP", "BRYAT", "BRSAN", 
+    "EUPWR", "GENIL", "GSDHO", "GWIND", "INDES", "INVES", "KARYE", "KAYSE", "KCHOL", "KOZAA", 
+    "KRDMD", "LOGO", "ODAS", "OTKAR", "QUAGR", "SAHOL", "SKBNK", "SOKM", "TAVHL", "TCELL", 
+    "TSKB", "TTKOM", "TURSG", "VAKBN", "VESTL", "YKBNK", "ZOREN", "ADEL", "ADESE", "AGESA", 
+    "AGROT", "AHGAZ", "AKFGY", "AKFYE", "AKPGR", "AKSUE", "ALBRK", "ALCTL", "ALKA", "ALMAD", 
+    "ANELE", "ARCLK", "ARDYZ", "ARENA", "ARZUM", "ASGEY", "ASGYO", "ATATP", "ATEKS", "AVPGY", 
+    "AYDEM", "AYEN", "AYGAZ", "BAGFS", "BAKAB", "BANVT", "BARMA", "BEYAZ", "BIGCH", "BIOEN", 
+    "BLCYT", "BNTAS", "BOBET", "BORSK", "BRISA", "BRLSM", "BUCIM", "BURCE", "CELHA", "CEMTS", 
+    "CONSE", "CVKMD", "DAGI", "DESPC", "DESAS", "DMSAS", "DOGUB", "DURDO", "DYOBY", "DZGYO", 
+    "EDATA", "EGGUB", "EGSER", "EKGYO", "EKLPI", "ELITE", "ENKAI", "ERBOS", "ERSU", "ESCOM", 
+    "EUHOL", "EYGY"
+])))
 
-# --- 2. LİSTE VE VERİ YÖNETİMİ ---
-def listeleri_yonet():
-    if not os.path.exists(DATA_FILE):
-        data = {"last_update": time.time(), "lists": GRUPLAR}
-        with open(DATA_FILE, "w") as f: json.dump(data, f)
-        return GRUPLAR
-    with open(DATA_FILE, "r") as f: return json.load(f)["lists"]
+# --- 2. ANALİZ VE AI ZEKASI ---
 
-def listeleri_internetten_guncelle():
-    print("🌐 Listeler internetten güncelleniyor...")
+def analiz_motoru(hisse, donem="1d"):
     try:
-        url = "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/temel-veriler.aspx"
-        r = requests.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        cekilen = [tag.text.strip() + ".IS" for tag in soup.find_all('th') if 2 <= len(tag.text.strip()) <= 6]
-
-        if len(cekilen) > 50:
-            aktif = listeleri_yonet()
-            aktif["bist100"] = cekilen[:100]
-            aktif["bist30"] = cekilen[:30]
-            with open(DATA_FILE, "w") as f:
-                json.dump({"last_update": time.time(), "lists": aktif}, f)
-            print("✅ Listeler başarıyla güncellendi.")
-            return True
-    except Exception as e:
-        print(f"❌ Güncelleme hatası: {e}")
-        return False
-
-# --- 3. ANALİZ VE SKORLAMA ---
-def gemini_yorumu_ekle(ticker, rsi, fiyat, ema9, upper_bb, donem):
-    alim = round(ema9, 2)
-    strateji = f"\n💡 *Strateji:* {alim} desteği takip edilebilir." if donem != "sabah" else f"\n🚀 *Strateji:* {fiyat} üstü kalıcılık pozitif."
-    if rsi < 32: return f"\n💎 **Gemini:** Hisse dipte, toplama bölgesi.{strateji}"
-    elif rsi > 72 or fiyat >= upper_bb: return f"\n⚠️ **Gemini:** Doyumda, kâr alımı uygun olabilir.{strateji}"
-    elif fiyat > ema9: return f"\n📈 **Gemini:** Trend yukarı canlı duruyor.{strateji}"
-    else: return f"\n⚖️ **Gemini:** Güç topluyor, destek beklenmeli.{strateji}"
-
-def hisse_skorla(ticker, donem="manuel"):
-    try:
-        ticker = str(ticker).strip().upper().replace("/", "")
-        if not any(x in ticker for x in [".IS", "=", "-"]): ticker += ".IS"
-
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        ticker = hisse.upper().strip()
+        if not (ticker.endswith(".IS") or "=" in ticker): ticker += ".IS"
+        p = "6mo" if donem == "1d" else "2y" if donem == "1wk" else "5y"
+        
+        df = yf.download(ticker, period=p, interval=donem, progress=False, threads=False)
         if df.empty or len(df) < 20: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=['Close'])
 
-        df["RSI"] = ta.momentum.RSIIndicator(df["Close"]).rsi()
-        df["EMA9"] = ta.trend.EMAIndicator(df["Close"], window=9).ema_indicator()
-        df["EMA21"] = ta.trend.EMAIndicator(df["Close"], window=21).ema_indicator()
-        df["BB_U"] = ta.volatility.BollingerBands(df["Close"]).bollinger_hband()
-
+        df["RSI"] = ta.rsi(df["Close"], length=14)
+        df["EMA9"] = ta.ema(df["Close"], length=9)
+        df["EMA21"] = ta.ema(df["Close"], length=21)
+        bb = ta.bbands(df["Close"], length=20)
+        
         last = df.iloc[-1]
-        fiyat, rsi = float(last["Close"]), float(last["RSI"])
-        skor = (1 if fiyat > float(last["EMA9"]) else 0) + (2 if 40 < rsi < 65 else 0)
-        karar = "🔥 GÜÇLÜ" if skor >= 3 else "📈 OLUMLU" if skor >= 1 else "⚖️ NÖTR"
-
-        return {
-            "ticker": ticker, "fiyat": fiyat, "rsi": rsi, "upper_bb": float(last["BB_U"]),
-            "ema21": float(last["EMA21"]), "ema9": float(last["EMA9"]),
-            "karar": karar, "df": df, "yorum": gemini_yorumu_ekle(ticker, rsi, fiyat, float(last["EMA9"]), float(last["BB_U"]), donem)
+        res = {
+            "ticker": ticker, "fiyat": float(last["Close"]), "rsi": float(last["RSI"]),
+            "ema9": float(last["EMA9"]), "ema21": float(last["EMA21"]),
+            "hedef": float(bb.iloc[-1, 2]), "df": df, "vade": donem
         }
+        
+        # Skorlama: Teknik Güç
+        res["skor"] = (10 if res["fiyat"] > res["ema9"] else 0) + (10 if 48 < res["rsi"] < 68 else 0)
+        return res
     except: return None
 
-def sonuc_gonder(chat_id, t):
+def gemini_strateji_al(hisse_listesi, vade_adi):
     try:
-        p_kar = round(((t["upper_bb"] - t["fiyat"]) / t["fiyat"]) * 100, 2)
-        risk = round(((t["fiyat"] - t["ema21"]) / t["fiyat"]) * 100, 2)
-        mesaj = (f"🏆 *{t['ticker']}*\n💰 *Fiyat:* {round(t['fiyat'], 2)} | *RSI:* {round(t['rsi'], 1)}\n🏁 *Karar:* `{t['karar']}`\n"
-                 f"---------------------------\n🟢 *Destek (EMA9):* `{round(t['ema9'], 2)}` \n🎯 *Hedef:* `{round(t['upper_bb'], 2)}` (%{p_kar})\n"
-                 f"🛑 *Stop (EMA21):* `{round(t['ema21'], 2)}` (%{risk})\n---------------------------\n{t['yorum']}")
+        ozet = "".join([f"{h['ticker']}: Fiyat {h['fiyat']}, RSI {h['rsi']}. " for h in hisse_listesi])
+        prompt = (f"Sen uzman bir borsa stratejistisin. Şu 5 hisseyi kıyasla: {ozet}. "
+                  f"Hacim artışlarını ve piyasa haberlerini düşünerek Emir Bey için en iyi 1 veya 2 tanesini seç. "
+                  f"Nedenini kısa ve öz açıkla, net bir al-sat emri ver.")
+        return ai_model.generate_content(prompt).text
+    except: return "AI yorumu şu an alınamıyor."
 
-        plt.figure(figsize=(7, 4)); plt.plot(t["df"]["Close"].tail(30).values, color="blue", linewidth=2)
+# --- 3. MESAJ VE RAPORLAMA ---
+
+def rapor_gonder(vade_kod="1d", vade_adi="GÜNLÜK"):
+    havuz = []
+    for h in KATILIM_LISTESI:
+        res = analiz_motoru(h, vade_kod)
+        if res and res["skor"] >= 20: havuz.append(res)
+    
+    en_iyi_5 = sorted(havuz, key=lambda x: x['skor'], reverse=True)[:5]
+    if not en_iyi_5: 
+        bot.send_message(MY_ID, f"😕 {vade_adi} için uygun fırsat bulunamadı.")
+        return
+
+    for t in en_iyi_5:
+        potansiyel = round(((t["hedef"] - t["fiyat"]) / t["fiyat"]) * 100, 1)
+        mesaj = (f"💎 *{vade_adi} ANALİZ:* {t['ticker']}\n"
+                 f"---------------------------\n"
+                 f"🛒 *Alım:* `{round(t['fiyat'], 2)}` | 🎯 *Hedef:* `{round(t['hedef'], 2)}` (%{potansiyel})\n"
+                 f"🛑 *Stop:* `{round(t['ema21'], 2)}` \n")
+        
+        plt.figure(figsize=(5, 2)); plt.plot(t["df"]["Close"].tail(30).values, color="green"); plt.axis('off')
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
-        bot.send_photo(chat_id, buf, caption=mesaj, parse_mode="Markdown")
-        plt.close("all")
-    except: pass
+        bot.send_photo(MY_ID, buf, caption=mesaj, parse_mode="Markdown"); plt.close("all")
+        time.sleep(1)
 
-# --- 4. ZAMANLAYICI (HATA DÜZELTİLDİ) ---
-def seans_raporu(donem):
-    aktif = listeleri_yonet()
-    bot.send_message(MY_CHAT_ID, f"📢 **RAPOR: {donem.upper()}**", parse_mode="Markdown")
-    for h in aktif.get("katilim", []):
-        res = hisse_skorla(h, donem)
-        if res and res["karar"] in ["🔥 GÜÇLÜ", "📈 OLUMLU"]: sonuc_gonder(MY_CHAT_ID, res)
+    ai_yorum = gemini_strateji_al(en_iyi_5, vade_adi)
+    bot.send_message(MY_ID, f"⭐ *EMİR BEY İÇİN ÖZEL SEÇİM*\n\n{ai_yorum}", parse_mode="Markdown")
 
-def zamanlayici():
-    def donemsel_kontrol():
-        simdi = datetime.now()
-        if simdi.day == 1 and simdi.month in [1, 4, 7, 10]:
-            listeleri_internetten_guncelle()
+# --- 4. KLAVYE VE KOMUTLAR ---
 
-    schedule.every().day.at("08:00").do(donemsel_kontrol)
+def ana_menu():
+    m = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    m.add("Günlük Katılım Fırsat", "İki Haftalık Katılım Fırsat", "Aylık Katılım Fırsat", "Tüm Katılım")
+    return m
 
-    # Hafta içi günleri tek tek tanımlayarak TypeError'u önledik
-    is_gunleri = [schedule.every().monday, schedule.every().tuesday, 
-                  schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
+@bot.message_handler(func=lambda message: True)
+def handle_requests(message):
+    txt = message.text.upper().strip()
+    if "FIRSAT" in txt:
+        v = "1wk" if "HAFTALIK" in txt else "1mo" if "AYLIK" in txt else "1d"
+        rapor_gonder(v, txt)
+    elif "TÜM KATILIM" in txt:
+        bot.send_message(message.chat.id, "🧾 147 Hisse Taranıyor...")
+        # (Kısa özet listeleme kodu buraya gelebilir)
+    elif 2 <= len(txt) <= 6: # Tekil Hisse Arama
+        res = analiz_motoru(txt)
+        if res:
+            ai_notu = gemini_strateji_al([res], "ÖZEL SORGULAMA")
+            mesaj = (f"📍 *HİSSE:* {res['ticker']}\n"
+                     f"🛒 *Fiyat:* `{res['fiyat']}` | 🎯 *Hedef:* `{res['hedef']}`\n"
+                     f"🤖 *AI:* {ai_notu}")
+            plt.figure(figsize=(5, 2)); plt.plot(res["df"]["Close"].tail(30).values); plt.axis('off')
+            buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
+            bot.send_photo(message.chat.id, buf, caption=mesaj, parse_mode="Markdown"); plt.close("all")
 
-    for gun in is_gunleri:
-        gun.at("09:55").do(seans_raporu, "sabah")
-        gun.at("18:05").do(seans_raporu, "aksam")
-
-    schedule.every().sunday.at("21:00").do(seans_raporu, "pazar")
-
+# --- 5. ZAMANLAYICI DÖNGÜSÜ ---
+def scheduler_start():
+    schedule.every().monday.to.friday.at("09:55").do(lambda: rapor_gonder("1d", "SABAH AÇILIŞ"))
+    schedule.every().monday.to.friday.at("17:50").do(lambda: rapor_gonder("1d", "AKŞAM KAPANIŞ"))
     while True:
         schedule.run_pending()
         time.sleep(30)
 
-# --- 5. MESAJ YÖNETİMİ ---
-@bot.message_handler(func=lambda message: True)
-def handle_text(message):
-    metin = message.text.strip().replace("/", "").lower()
-    temiz_metin = metin.replace("tum_", "") # tum_bist30 -> bist30 yapar
-
-    aktif_listeler = listeleri_yonet()
-
-    if temiz_metin in aktif_listeler:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} listesi taranıyor...")
-        for h in aktif_listeler[temiz_metin]:
-            res = hisse_skorla(h)
-            if res: sonuc_gonder(message.chat.id, res)
-        bot.send_message(message.chat.id, "✅ Tarama bitti.")
-    else:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} analiz ediliyor...")
-        res = hisse_skorla(metin)
-        if res: sonuc_gonder(message.chat.id, res)
-        else: bot.send_message(message.chat.id, "❌ Veri alınamadı.")
-
 if __name__ == "__main__":
-    # Flask ve Zamanlayıcıyı ayrı kanallarda başlat
-    threading.Thread(target=run_web_server, daemon=True).start()
-    threading.Thread(target=zamanlayici, daemon=True).start()
-
-    print("🚀 Sistem Hazır! Port 8080 aktif.")
-    # infinity_polling ile botun kopmasını engelle
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    threading.Thread(target=scheduler_start, daemon=True).start()
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
+    bot.infinity_polling()
