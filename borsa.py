@@ -14,7 +14,7 @@ import threading
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
-from Flask import Flask
+from flask import Flask  # <-- BURASI DÜZELTİLDİ (f harfi küçük olmalı)
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -37,34 +37,30 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 MY_CHAT_ID = os.environ.get("MY_CHAT_ID")
 bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "borsa_verileri.json"
-CSV_FILE = "hisse_endeks_katilim_ds.csv" # Senin yüklediğin dosya adı
+CSV_FILE = "hisse_endeks_katilim_ds.csv"
 
-# İlk Kurulum Listeleri (Katılım buraya boş gelecek, dosyadan dolacak)
+# İlk Kurulum Listeleri
 GRUPLAR = {
     "katilim": [], 
     "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"],
     "altin": ["ALTINS.IS", "ZGOLD.IS", "GMSTR.IS", "GLDGR.IS"]
 }
 
-# --- 2. LİSTE VE VERİ YÖNETİMİ (DOSYA ENTEGRASYONU) ---
+# --- 2. LİSTE VE VERİ YÖNETİMİ ---
 def listeleri_yonet():
-    # Önce CSV'den katılım listesini güncelleyelim
     katilim_listesi = []
     if os.path.exists(CSV_FILE):
         try:
-            # Noktalı virgül ayracı ve ilk 2 satırı atlayarak oku
             df_csv = pd.read_csv(CSV_FILE, sep=';', skiprows=2, header=None)
             ham_liste = df_csv.iloc[:, 0].dropna().astype(str).tolist()
             for h in ham_liste:
                 sembol = h.split('.')[0].strip().upper()
                 if sembol:
                     katilim_listesi.append(f"{sembol}.IS")
-            # Mükerrerleri temizle
             katilim_listesi = sorted(list(set(katilim_listesi)))
         except Exception as e:
             print(f"❌ CSV Okuma Hatası: {e}")
 
-    # JSON dosyasını yönet
     if not os.path.exists(DATA_FILE):
         data_to_save = GRUPLAR.copy()
         if katilim_listesi:
@@ -77,13 +73,11 @@ def listeleri_yonet():
     with open(DATA_FILE, "r") as f:
         mevcut_data = json.load(f)
         aktif_listeler = mevcut_data["lists"]
-        # Katılım listesini her zaman dosyadan gelenle güncelle
         if katilim_listesi:
             aktif_listeler["katilim"] = katilim_listesi
         return aktif_listeler
 
 def listeleri_internetten_guncelle():
-    print("🌐 BIST listeleri internetten güncelleniyor...")
     try:
         url = "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/temel-veriler.aspx"
         r = requests.get(url, timeout=15)
@@ -96,7 +90,6 @@ def listeleri_internetten_guncelle():
             aktif["bist30"] = cekilen[:30]
             with open(DATA_FILE, "w") as f:
                 json.dump({"last_update": time.time(), "lists": aktif}, f)
-            print("✅ Listeler başarıyla güncellendi.")
             return True
     except Exception as e:
         print(f"❌ Güncelleme hatası: {e}")
@@ -165,17 +158,12 @@ def zamanlayici():
         simdi = datetime.now()
         if simdi.day == 1 and simdi.month in [1, 4, 7, 10]:
             listeleri_internetten_guncelle()
-
     schedule.every().day.at("08:00").do(donemsel_kontrol)
     is_gunleri = [schedule.every().monday, schedule.every().tuesday, 
                   schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
-
     for gun in is_gunleri:
         gun.at("09:55").do(seans_raporu, "sabah")
         gun.at("18:05").do(seans_raporu, "aksam")
-
-    schedule.every().sunday.at("21:00").do(seans_raporu, "pazar")
-
     while True:
         schedule.run_pending()
         time.sleep(30)
@@ -185,28 +173,22 @@ def zamanlayici():
 def handle_text(message):
     metin = message.text.strip().replace("/", "").lower()
     temiz_metin = metin.replace("tum_", "") 
-
     aktif_listeler = listeleri_yonet()
-
     if temiz_metin in aktif_listeler:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} listesi taranıyor (Toplam: {len(aktif_listeler[temiz_metin])} hisse)...")
+        bot.send_message(message.chat.id, f"🔍 {metin.upper()} listesi taranıyor...")
         for h in aktif_listeler[temiz_metin]:
             res = hisse_skorla(h)
             if res: sonuc_gonder(message.chat.id, res)
         bot.send_message(message.chat.id, "✅ Tarama bitti.")
     else:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} analiz ediliyor...")
         res = hisse_skorla(metin)
         if res: sonuc_gonder(message.chat.id, res)
-        else: bot.send_message(message.chat.id, "❌ Veri alınamadı.")
+        else: bot.send_message(message.chat.id, "❌ Liste veya hisse bulunamadı.")
 
 if __name__ == "__main__":
-    # Çakışmaları önlemek için webhook temizleme
     bot.remove_webhook()
     time.sleep(1)
-
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=zamanlayici, daemon=True).start()
-
-    print("🚀 Sistem Hazır! Katılım listesi CSV'den okunuyor.")
+    print("🚀 Sistem Hazır! Flask düzeltildi.")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
