@@ -7,3 +7,6 @@ scikit-learn
 google-generativeai
 flask
 matplotlib
+schedule
+requests
+beautifulsoup4
