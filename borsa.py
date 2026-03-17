@@ -2,193 +2,90 @@ import os
 import telebot
 import yfinance as yf
 import ta
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import io
-import time
 import pandas as pd
-import json
-import schedule
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+import google.generativeai as genai
+import time
 import threading
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
-from flask import Flask  # <-- BURASI DÜZELTİLDİ (f harfi küçük olmalı)
-import warnings
+from flask import Flask
 
-warnings.filterwarnings("ignore")
-
-# --- 1. AYARLAR VE FLASK ---
+# --- AYARLAR ---
 app = Flask(__name__)
-
-@app.route('/')
-def home(): 
-    return "Bot Calisiyor! (Ana Dizin)", 200
-
-@app.route('/api')
-def health_check(): 
-    return "Sistem Aktif (API)", 200
-
-def run_web_server():
-    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
-
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MY_CHAT_ID = os.environ.get("MY_CHAT_ID")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 bot = telebot.TeleBot(TOKEN)
-DATA_FILE = "borsa_verileri.json"
 CSV_FILE = "hisse_endeks_katilim_ds.csv"
 
-# İlk Kurulum Listeleri
-GRUPLAR = {
-    "katilim": [], 
-    "bist30": ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"],
-    "altin": ["ALTINS.IS", "ZGOLD.IS", "GMSTR.IS", "GLDGR.IS"]
-}
+genai.configure(api_key=GEMINI_KEY)
+model_gemini = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. LİSTE VE VERİ YÖNETİMİ ---
-def listeleri_yonet():
-    katilim_listesi = []
-    if os.path.exists(CSV_FILE):
-        try:
-            df_csv = pd.read_csv(CSV_FILE, sep=';', skiprows=2, header=None)
-            ham_liste = df_csv.iloc[:, 0].dropna().astype(str).tolist()
-            for h in ham_liste:
-                sembol = h.split('.')[0].strip().upper()
-                if sembol:
-                    katilim_listesi.append(f"{sembol}.IS")
-            katilim_listesi = sorted(list(set(katilim_listesi)))
-        except Exception as e:
-            print(f"❌ CSV Okuma Hatası: {e}")
-
-    if not os.path.exists(DATA_FILE):
-        data_to_save = GRUPLAR.copy()
-        if katilim_listesi:
-            data_to_save["katilim"] = katilim_listesi
-        
-        data = {"last_update": time.time(), "lists": data_to_save}
-        with open(DATA_FILE, "w") as f: json.dump(data, f)
-        return data_to_save
-    
-    with open(DATA_FILE, "r") as f:
-        mevcut_data = json.load(f)
-        aktif_listeler = mevcut_data["lists"]
-        if katilim_listesi:
-            aktif_listeler["katilim"] = katilim_listesi
-        return aktif_listeler
-
-def listeleri_internetten_guncelle():
+# Analiz Motoru
+def analiz_et(ticker):
     try:
-        url = "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/temel-veriler.aspx"
-        r = requests.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        cekilen = [tag.text.strip() + ".IS" for tag in soup.find_all('th') if 2 <= len(tag.text.strip()) <= 6]
-
-        if len(cekilen) > 50:
-            aktif = listeleri_yonet()
-            aktif["bist100"] = cekilen[:100]
-            aktif["bist30"] = cekilen[:30]
-            with open(DATA_FILE, "w") as f:
-                json.dump({"last_update": time.time(), "lists": aktif}, f)
-            return True
-    except Exception as e:
-        print(f"❌ Güncelleme hatası: {e}")
-        return False
-
-# --- 3. ANALİZ VE SKORLAMA ---
-def gemini_yorumu_ekle(ticker, rsi, fiyat, ema9, upper_bb, donem):
-    alim = round(ema9, 2)
-    strateji = f"\n💡 *Strateji:* {alim} desteği takip edilebilir." if donem != "sabah" else f"\n🚀 *Strateji:* {fiyat} üstü kalıcılık pozitif."
-    if rsi < 32: return f"\n💎 **Gemini:** Hisse dipte, toplama bölgesi.{strateji}"
-    elif rsi > 72 or fiyat >= upper_bb: return f"\n⚠️ **Gemini:** Doyumda, kâr alımı uygun olabilir.{strateji}"
-    elif fiyat > ema9: return f"\n📈 **Gemini:** Trend yukarı canlı duruyor.{strateji}"
-    else: return f"\n⚖️ **Gemini:** Güç topluyor, destek beklenmeli.{strateji}"
-
-def hisse_skorla(ticker, donem="manuel"):
-    try:
-        ticker = str(ticker).strip().upper().replace("/", "")
-        if not any(x in ticker for x in [".IS", "=", "-"]): ticker += ".IS"
-
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        if df.empty or len(df) < 20: return None
+        if df.empty or len(df) < 30: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=['Close'])
 
         df["RSI"] = ta.momentum.RSIIndicator(df["Close"]).rsi()
         df["EMA9"] = ta.trend.EMAIndicator(df["Close"], window=9).ema_indicator()
-        df["EMA21"] = ta.trend.EMAIndicator(df["Close"], window=21).ema_indicator()
-        df["BB_U"] = ta.volatility.BollingerBands(df["Close"]).bollinger_hband()
+        
+        # AI Tahmini
+        data = df.copy()
+        data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
+        features = ['RSI', 'EMA9', 'Volume']
+        data = data.dropna()
+        clf = RandomForestClassifier(n_estimators=50)
+        clf.fit(data[features].tail(100), data['Target'].tail(100))
+        ai_skor = round(clf.predict_proba(data[features].tail(1))[0][1] * 100, 1)
 
         last = df.iloc[-1]
-        fiyat, rsi = float(last["Close"]), float(last["RSI"])
-        skor = (1 if fiyat > float(last["EMA9"]) else 0) + (2 if 40 < rsi < 65 else 0)
-        karar = "🔥 GÜÇLÜ" if skor >= 3 else "📈 OLUMLU" if skor >= 1 else "⚖️ NÖTR"
-
-        return {
-            "ticker": ticker, "fiyat": fiyat, "rsi": rsi, "upper_bb": float(last["BB_U"]),
-            "ema21": float(last["EMA21"]), "ema9": float(last["EMA9"]),
-            "karar": karar, "df": df, "yorum": gemini_yorumu_ekle(ticker, rsi, fiyat, float(last["EMA9"]), float(last["BB_U"]), donem)
-        }
+        return {"ticker": ticker, "fiyat": round(last["Close"], 2), "ai": ai_skor, "rsi": round(last["RSI"], 1)}
     except: return None
 
-def sonuc_gonder(chat_id, t):
-    try:
-        p_kar = round(((t["upper_bb"] - t["fiyat"]) / t["fiyat"]) * 100, 2)
-        risk = round(((t["fiyat"] - t["ema21"]) / t["fiyat"]) * 100, 2)
-        mesaj = (f"🏆 *{t['ticker']}*\n💰 *Fiyat:* {round(t['fiyat'], 2)} | *RSI:* {round(t['rsi'], 1)}\n🏁 *Karar:* `{t['karar']}`\n"
-                 f"---------------------------\n🟢 *Destek (EMA9):* `{round(t['ema9'], 2)}` \n🎯 *Hedef:* `{round(t['upper_bb'], 2)}` (%{p_kar})\n"
-                 f"🛑 *Stop (EMA21):* `{round(t['ema21'], 2)}` (%{risk})\n---------------------------\n{t['yorum']}")
-
-        plt.figure(figsize=(7, 4)); plt.plot(t["df"]["Close"].tail(30).values, color="blue", linewidth=2)
-        buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
-        bot.send_photo(chat_id, buf, caption=mesaj, parse_mode="Markdown")
-        plt.close("all")
-    except: pass
-
-# --- 4. ZAMANLAYICI ---
-def seans_raporu(donem):
-    aktif = listeleri_yonet()
-    bot.send_message(MY_CHAT_ID, f"📢 **RAPOR: {donem.upper()}**", parse_mode="Markdown")
-    for h in aktif.get("katilim", []):
-        res = hisse_skorla(h, donem)
-        if res and res["karar"] in ["🔥 GÜÇLÜ", "📈 OLUMLU"]: sonuc_gonder(MY_CHAT_ID, res)
-
-def zamanlayici():
-    def donemsel_kontrol():
-        simdi = datetime.now()
-        if simdi.day == 1 and simdi.month in [1, 4, 7, 10]:
-            listeleri_internetten_guncelle()
-    schedule.every().day.at("08:00").do(donemsel_kontrol)
-    is_gunleri = [schedule.every().monday, schedule.every().tuesday, 
-                  schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
-    for gun in is_gunleri:
-        gun.at("09:55").do(seans_raporu, "sabah")
-        gun.at("18:05").do(seans_raporu, "aksam")
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
-
-# --- 5. MESAJ YÖNETİMİ ---
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda m: True)
 def handle_text(message):
-    metin = message.text.strip().replace("/", "").lower()
-    temiz_metin = metin.replace("tum_", "") 
-    aktif_listeler = listeleri_yonet()
-    if temiz_metin in aktif_listeler:
-        bot.send_message(message.chat.id, f"🔍 {metin.upper()} listesi taranıyor...")
-        for h in aktif_listeler[temiz_metin]:
-            res = hisse_skorla(h)
-            if res: sonuc_gonder(message.chat.id, res)
-        bot.send_message(message.chat.id, "✅ Tarama bitti.")
+    metin = message.text.strip().lower()
+    hisseler = []
+    filtre_uygula = "fırsat" in metin
+
+    # Liste Seçimi
+    if "altın" in metin or "altin" in metin or "fon" in metin:
+        hisseler = ["ALTINS.IS", "GMSTR.IS", "ZGOLD.IS", "GLDGR.IS", "MKP.IS", "KPT.IS", "GGK.IS", "KGC.IS"]
+    elif "bist 30" in metin or "bist30" in metin:
+        hisseler = ["AKBNK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EREGL.IS", "FROTO.IS", "GARAN.IS", "KCHOL.IS", "THYAO.IS", "TUPRS.IS"]
+    elif "katılım" in metin:
+        df_csv = pd.read_csv(CSV_FILE, sep=';', skiprows=2, header=None)
+        hisseler = [h.split('.')[0].strip().upper() + ".IS" for h in df_csv[0].dropna()]
     else:
-        res = hisse_skorla(metin)
-        if res: sonuc_gonder(message.chat.id, res)
-        else: bot.send_message(message.chat.id, "❌ Liste veya hisse bulunamadı.")
+        res = analiz_et(metin.upper())
+        if res: bot.send_message(message.chat.id, f"📊 *{res['ticker']}*\nAI Skor: %{res['ai']}\nFiyat: {res['fiyat']}\nRSI: {res['rsi']}", parse_mode="Markdown")
+        return
+
+    # Analiz ve Gönderim
+    bot.send_message(message.chat.id, f"🔍 {len(hisseler)} enstrüman taranıyor...")
+    sonuclar = []
+    limit = 100 if "katılım" in metin else len(hisseler)
+
+    for h in hisseler[:limit]:
+        res = analiz_et(h)
+        if res:
+            if filtre_uygula:
+                if res['ai'] >= 70: sonuclar.append(res)
+            else:
+                sonuclar.append(res)
+    
+    if filtre_uygula: sonuclar = sorted(sonuclar, key=lambda x: x['ai'], reverse=True)[:5]
+    
+    msg_chunk = "📋 *ANALİZ SONUÇLARI*\n\n"
+    for i, r in enumerate(sonuclar):
+        msg_chunk += f"🔸 *{r['ticker']}* | AI: %{r['ai']} | F: {r['fiyat']}\n"
+        if (i + 1) % 10 == 0:
+            bot.send_message(message.chat.id, msg_chunk, parse_mode="Markdown")
+            msg_chunk = ""
+            time.sleep(0.5)
+    if msg_chunk: bot.send_message(message.chat.id, msg_chunk, parse_mode="Markdown")
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    time.sleep(1)
-    threading.Thread(target=run_web_server, daemon=True).start()
-    threading.Thread(target=zamanlayici, daemon=True).start()
-    print("🚀 Sistem Hazır! Flask düzeltildi.")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
+    bot.infinity_polling()
