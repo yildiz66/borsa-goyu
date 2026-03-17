@@ -215,7 +215,27 @@ def handle_text(message):
 
 # --- 8. PROGRAM BAŞLANGICI ---
 if __name__ == "__main__":
+    # JSON dosyasını temizle
+    if os.path.exists(DATA_FILE):
+        os.remove(DATA_FILE)
+
+    # Katılım listesi güncel
+    katilim_tum_guncelle()
+
+    # Diğer listeleri JSON’da eksikse doldur
+    aktif = listeleri_yonet()
+    if not aktif.get("bist30"):
+        endeks_tum_guncelle("bist30", "https://www.borsaistanbul.com/files/endeksler/XBIST30_Endeks_Bilesenleri.xlsx")
+    if not aktif.get("bist50"):
+        endeks_tum_guncelle("bist50", "https://www.borsaistanbul.com/files/endeksler/XBIST50_Endeks_Bilesenleri.xlsx")
+    if not aktif.get("bist100"):
+        endeks_tum_guncelle("bist100", "https://www.borsaistanbul.com/files/endeksler/XBIST100_Endeks_Bilesenleri.xlsx")
+    if not aktif.get("altin"):
+        endeks_tum_guncelle("altin", "https://www.borsaistanbul.com/files/endeksler/XALTIN_Endeks_Bilesenleri.xlsx")
+
+    # Flask ve zamanlayıcı
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=zamanlayici, daemon=True).start()
+
     print("🚀 Sistem Hazır! Port 8080 aktif.")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
