@@ -49,7 +49,6 @@ def analiz_motoru(hisse, vade="1d"):
 
 def ai_sinyal_uret(res):
     try:
-        # SENİN ÖZEL HEDGE FUND PROMPTUN
         prompt = f"""
         Sen profesyonel bir hedge fon traderısın ve tamamen sistematik işlem yaparsın.
         Aşağıdaki veriyi analiz et ve hem SKOR hem de NET TRADE KARARI üret:
@@ -81,7 +80,6 @@ def ai_sinyal_uret(res):
         GİRİŞ: ... | STOP-LOSS: ... | HEDEF: ... | RİSK/ÖDÜL: ...
         STRATEJİ: (Kısa teknik açıklama)
         """
-        
         comp = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama-3.3-70b-versatile")
         return comp.choices[0].message.content.replace("*", "").replace("_", "").replace("#", "")
     except: return "Analiz yapılamadı."
@@ -98,7 +96,7 @@ def rapor_gonder(liste, vade, baslik):
     en_iyi = sorted(havuz, key=lambda x: x['pot'], reverse=True)[:3]
     
     for t in en_iyi:
-        # Grafik
+        # Grafik Hazırla
         fig, ax = plt.subplots(figsize=(10, 5))
         df_p = t["df"].tail(50)
         ax.plot(df_p['Close'].values, color='#2ecc71', label="Fiyat")
@@ -107,15 +105,16 @@ def rapor_gonder(liste, vade, baslik):
         ax.legend(); ax.grid(True, alpha=0.1)
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0); plt.close()
         
-        # Senin hazırladığın profesyonel çıktı
+        # AI Stratejisi
         strateji = ai_sinyal_uret(t)
         
-        caption = (f"📈 #{t['ticker']} ANALİZİ\n"
-                   f"📊 Başarı Skoru: %{t['success']}\n"
-                   f"------------------------\n"
-                   f"{strateji}")
+        # --- DEĞİŞİKLİK BURADA: FOTO VE YAZIYI AYIRDIK ---
+        # 1. Önce sadece grafik ve kısa başlık
+        bot.send_photo(MY_ID, buf, caption=f"📈 #{t['ticker']} ANALİZİ (%{t['success']} Başarı)")
         
-        bot.send_photo(MY_ID, buf, caption=caption)
+        # 2. Sonra uzun teknik rapor (Ayrı mesaj - Sınır 4096 karakter)
+        bot.send_message(MY_ID, f"📄 <b>TEKNİK RAPOR:</b>\n\n{strateji}", parse_mode="HTML")
+        
         time.sleep(1.5)
 
 @bot.message_handler(commands=['gunluk'])
