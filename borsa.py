@@ -63,7 +63,7 @@ def rapor_gonder(liste, vade, baslik):
         
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3-70b-versatile", # En güçlü ve dengeli model
+            model="llama-3.3-70b-versatile", # En güçlü ve dengeli model
         )
         
         bot.send_message(MY_ID, f"⚡ *Groq Analiz Kararı:*\n\n{chat_completion.choices[0].message.content}", parse_mode="Markdown")
