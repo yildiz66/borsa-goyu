@@ -1,75 +1,97 @@
-import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
+import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests, schedule
 import pandas as pd
 import matplotlib.pyplot as plt
-from groq import Groq # Gemini yerine Groq geldi
+from groq import Groq
 from flask import Flask
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 app = Flask(__name__)
-@app.route('/')
-def home(): return "BorsaBot Groq Aktif", 200
 
+# --- 1. AYARLAR VE API (SİZİN DEĞİŞKEN İSİMLERİNİZ) ---
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GROG_API_KEY = os.environ.get("GROG_API_KEY") # Railway'e bu isimle ekleyin
+GROG_API_KEY = os.environ.get("GROG_API_KEY") # Orijinal ismine sadık kalındı
 MY_ID = os.environ.get("MY_CHAT_ID")
 
 bot = telebot.TeleBot(TOKEN)
 client = Groq(api_key=GROG_API_KEY)
 
-# 215 Hisselik Liste
+# --- 2. 215 HİSSELİK TAM LİSTE ---
 KATILIM_TUMU = ["ACSEL", "AHSGY", "AKFYE", "AKHAN", "AKSA", "AKYHO", "ALBRK", "ALCTL", "ALKA", "ALKIM", "ALKLC", "ALTNY", "ALVES", "ANGEN", "ARASE", "ARDYZ", "ARFYE", "ASELS", "ATAKP", "ATATP", "AVPGY", "AYEN", "BAHKM", "BAKAB", "BANVT", "BASGZ", "BEGYO", "BERA", "BESTE", "BIENY", "BIMAS", "BINBN", "BINHO", "BMSTL", "BNTAS", "BORSK", "BOSSA", "BRISA", "BRKSN", "BRLSM", "BSOKE", "BURCE", "BURVA", "CANTE", "CATES", "CELHA", "CEMTS", "CEMZY", "CIMSA", "CMBTN", "COSMO", "CVKMD", "CWENE", "DAPGM", "DARDL", "DCTTR", "DENGE", "DESPC", "DGATE", "DGNMO", "DMSAS", "DOFER", "DOFRB", "DOGUB", "DYOBY", "EBEBK", "EDATA", "EDIP", "EFOR", "EGEPO", "EGGUB", "EGPRO", "EKGYO", "EKSUN", "ELITE", "EMPAE", "ENJSA", "EREGL", "ESCOM", "EUPWR", "EYGYO", "FADE", "FONET", "FORMT", "FORTE", "FRMPL", "FZLGY", "GEDZA", "GENIL", "GENKM", "GENTS", "GEREL", "GESAN", "GLRMK", "GOKNR", "GOLTS", "GOODY", "GRSEL", "GRTHO", "GUBRF", "GUNDG", "HATSN", "HKTM", "HOROZ", "HRKET", "IDGYO", "IHEVA", "IHLAS", "IHLGM", "IHYAY", "IMASM", "INTEM", "ISDMR", "ISSEN", "IZFAS", "IZINV", "JANTS", "KARSN", "KATMR", "KBORU", "KCAER", "KIMMR", "KLSYN", "KNFRT", "KOCMT", "KONKA", "KONTR", "KONYA", "KOPOL", "KOTON", "KRDMA", "KRDMB", "KRDMD", "KRGYO", "KRONT", "KRPLS", "KRSTL", "KRVGD", "KTLEV", "KUTPO", "KUYAS", "KZBGY", "LKMNH", "LMKDC", "LOGO", "LXGYO", "MAGEN", "MAKIM", "MARBL", "MAVI", "MCARD", "MEDTR", "MEKAG", "MERCN", "MEYSU", "MNDRS", "MNDTR", "MOBTL", "MPARK", "NETAS", "NTGAZ", "OBAMS", "OBASE", "OFSYM", "ONCSM", "ORGE", "OSTIM", "OZRDN", "OZYSR", "PAGYO", "PARSN", "PASEU", "PENGD", "PENTA", "PETKM", "PETUN", "PKART", "PLTUR", "PNLSN", "POLHO", "QUAGR", "RGYAS", "RNPOL", "RODRG", "RUBNS", "SAFKR", "SAMAT", "SANEL", "SANKO", "SARKY", "SAYAS", "SEKUR", "SELEC", "SELVA", "SILVR", "SMART", "SMRTG", "SNGYO", "SNICA", "SOKE", "SRVGY", "SUNTK", "SURGY", "SUWEN", "TARKM", "TDGYO", "TEZOL", "TKNSA", "TMSN", "TOASO", "TRILC", "TSPOR", "TUCLK", "TUKAS", "TUPRS", "TURGG", "TUREX", "ULAS", "ULKER", "ULUFA", "ULUSE", "UNLU", "USAK", "VAKFN", "VANGD", "VBTYZ", "VERTU", "VESBE", "VESTL", "YEOTK", "YGGYO", "YGYO", "YUNSA", "YYLGD", "ZEDUR"]
 
+@app.route('/')
+def home(): return "Bot Calisiyor", 200
+
+# --- 3. ANALİZ MOTORU ---
 def analiz_motoru(hisse, vade="1d"):
     try:
         f_t = f"{hisse.upper().strip()}.IS"
-        df = yf.download(f_t, period="2y", interval=vade, progress=False, timeout=10)
-        if df is None or df.empty or len(df) < 20: return None
+        df = yf.download(f_t, period="1y", interval=vade, progress=False, timeout=10)
+        if df is None or df.empty or len(df) < 30: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        
         df["RSI"] = ta.rsi(df["Close"], length=14)
+        df["EMA9"] = ta.ema(df["Close"], length=9)
+        df["EMA21"] = ta.ema(df["Close"], length=21)
         bb = ta.bbands(df["Close"], length=20)
-        c_p, c_r = float(df.iloc[-1]["Close"]), float(df.iloc[-1]["RSI"])
+        
+        last = df.iloc[-1]
+        c_p = float(last["Close"])
         u_b = float(bb.iloc[-1, 2])
-        pot = ((u_b - c_p) / c_p) * 100
-        return {"ticker": hisse, "fiyat": c_p, "rsi": c_r, "pot": pot, "df": df}
+        
+        return {
+            "ticker": hisse, "fiyat": c_p, "rsi": float(last["RSI"]), 
+            "pot": ((u_b - c_p) / c_p) * 100, "ema9": float(last["EMA9"]), 
+            "ema21": float(last["EMA21"]), "u_b": u_b, "df": df
+        }
     except: return None
 
+# --- 4. RAPOR GÖNDERME ---
 def rapor_gonder(liste, vade, baslik):
-    bot.send_message(MY_ID, f"🚀 {baslik} Analiz Başladı Emir Bey...\n(Groq Hız Motoru Aktif)")
+    bot.send_message(MY_ID, f"🚀 {baslik} Analiz Başladı Emir Bey...")
     havuz = []
     for h in liste:
         res = analiz_motoru(h, vade)
-        if res and 30 < res["rsi"] < 70: havuz.append(res)
-        time.sleep(0.05)
+        if res and res["fiyat"] > res["ema9"] and 35 < res["rsi"] < 65:
+            havuz.append(res)
+        time.sleep(0.04)
 
-    en_iyi = sorted(havuz, key=lambda x: x['pot'], reverse=True)[:5]
+    en_iyi = sorted(havuz, key=lambda x: x['pot'], reverse=True)[:3]
     if not en_iyi:
-        bot.send_message(MY_ID, "⚠️ Uygun hisse bulunamadı.")
+        bot.send_message(MY_ID, "⚠️ Kriterlere uygun hisse bulunamadı.")
         return
 
     ai_data = []
     for t in en_iyi:
-        plt.figure(figsize=(5, 3))
-        plt.plot(t["df"]["Close"].tail(30).values, color='green', linewidth=2)
-        plt.title(f"{t['ticker']} Trend")
-        buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
-        bot.send_photo(MY_ID, buf, caption=f"💎 *{t['ticker']}*\nFiyat: {round(t['fiyat'],2)} | RSI: {round(t['rsi'],1)}")
+        # Fiyat + EMA + Hacim Grafiği
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        df_p = t["df"].tail(40)
+        
+        ax1.plot(df_p['Close'].values, color='#2ecc71', linewidth=2, label="Fiyat")
+        ax1.plot(df_p['EMA9'].values, color='#f1c40f', linestyle='--', label="EMA9")
+        ax1.plot(df_p['EMA21'].values, color='#e74c3c', label="EMA21 (STOP)")
+        ax1.set_title(f"{t['ticker']} - Teknik Görünüm")
+        ax1.legend(); ax1.grid(True, alpha=0.2)
+        ax2.bar(range(40), df_p['Volume'].values, color='gray', alpha=0.5)
+        
+        buf = io.BytesIO(); plt.savefig(buf, format="png", dpi=100); buf.seek(0)
+        
+        caption = (f"💎 *#{t['ticker']}*\n💰 Fiyat: {round(t['fiyat'],2)} TL\n"
+                   f"🎯 Hedef: {round(t['u_b'],2)} TL (%{round(t['pot'],1)})\n"
+                   f"🛑 Stop (EMA21): {round(t['ema21'],2)} TL\n"
+                   f"📊 RSI: {round(t['rsi'],1)}")
+        
+        bot.send_photo(MY_ID, buf, caption=caption, parse_mode="Markdown")
         plt.close()
-        ai_data.append(f"{t['ticker']}(Fiyat:{round(t['fiyat'],1)}, RSI:{round(t['rsi'],0)})")
+        ai_data.append(f"{t['ticker']}(Fiyat:{t['fiyat']}, Hedef:{round(t['u_b'],1)}, Stop:{round(t['ema21'],1)})")
 
-    # --- GROQ ANALİZ (SÜPER HIZLI) ---
     try:
-        prompt = (f"Sen uzman bir borsa stratejistisin. {baslik} vade için seçilen 3 hisse: {', '.join(ai_data)}. "
-                  "Her biri için net 'AL' veya 'BEKLE' kararı ver ve nedenini 1 cümleyle açıkla.")
-        
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.3-70b-versatile", # En güçlü ve dengeli model
-        )
-        
-        bot.send_message(MY_ID, f"⚡ *Groq Analiz Kararı:*\n\n{chat_completion.choices[0].message.content}", parse_mode="Markdown")
-    except Exception as e:
-        bot.send_message(MY_ID, f"⚠️ Analiz Hatası: {str(e)[:50]}")
+        prompt = f"Uzman analist olarak şu hisseleri teknik yorumla: {', '.join(ai_data)}"
+        completion = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama-3.3-70b-versatile")
+        bot.send_message(MY_ID, f"🧠 *ANALİZ NOTU:*\n\n{completion.choices[0].message.content}")
+    except: pass
 
+# --- 5. MENÜLER VE KOMUTLAR ---
 @bot.message_handler(commands=['gunluk'])
 def cmd_1(m): rapor_gonder(KATILIM_TUMU, "1d", "GÜNLÜK")
 
@@ -80,8 +102,17 @@ def cmd_2(m): rapor_gonder(KATILIM_TUMU, "1wk", "İKİ HAFTALIK")
 def cmd_3(m): rapor_gonder(KATILIM_TUMU, "1mo", "AYLIK")
 
 @bot.message_handler(commands=['start'])
-def start(m): bot.send_message(m.chat.id, "📈 Groq Destekli Terminal Aktif!\n/gunluk\n/ikihaftalik\n/aylik")
+def start(m): bot.send_message(m.chat.id, "📈 Terminal Aktif!\n/gunluk\n/ikihaftalik\n/aylik")
+
+# --- 6. ZAMANLAYICI ---
+def scheduler_loop():
+    schedule.every().day.at("09:55").do(lambda: rapor_gonder(KATILIM_TUMU, "1d", "Sabah Açılış") if datetime.now().weekday() < 5 else None)
+    schedule.every().day.at("18:10").do(lambda: rapor_gonder(KATILIM_TUMU, "1d", "Akşam Kapanış") if datetime.now().weekday() < 5 else None)
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=os.environ.get("PORT", 8080)), daemon=True).start()
+    threading.Thread(target=scheduler_loop, daemon=True).start()
     bot.infinity_polling()
