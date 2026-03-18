@@ -1,7 +1,9 @@
 pyTelegramBotAPI
 yfinance
+pandas
 pandas_ta
 matplotlib
+groq
 flask
 requests
-groq
+schedule
