@@ -1,4 +1,4 @@
-import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
+import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, re
 import pandas as pd
 import matplotlib.pyplot as plt
 from groq import Groq
@@ -13,6 +13,12 @@ MY_ID = os.environ.get("MY_CHAT_ID")
 
 bot = telebot.TeleBot(TOKEN)
 client = Groq(api_key=GROG_API_KEY)
+
+# --- TELEGRAM KARAKTER TEMİZLEME FONKSİYONU ---
+def escape_markdown(text):
+    """Telegram MarkdownV2 için özel karakterleri temizler."""
+    parse_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(parse_chars)}])', r'\\\1', text)
 
 KATILIM_TUMU = ["ACSEL", "AHSGY", "AKFYE", "AKHAN", "AKSA", "AKYHO", "ALBRK", "ALCTL", "ALKA", "ALKIM", "ALKLC", "ALTNY", "ALVES", "ANGEN", "ARASE", "ARDYZ", "ARFYE", "ASELS", "ATAKP", "ATATP", "AVPGY", "AYEN", "BAHKM", "BAKAB", "BANVT", "BASGZ", "BEGYO", "BERA", "BESTE", "BIENY", "BIMAS", "BINBN", "BINHO", "BMSTL", "BNTAS", "BORSK", "BOSSA", "BRISA", "BRKSN", "BRLSM", "BSOKE", "BURCE", "BURVA", "CANTE", "CATES", "CELHA", "CEMTS", "CEMZY", "CIMSA", "CMBTN", "COSMO", "CVKMD", "CWENE", "DAPGM", "DARDL", "DCTTR", "DENGE", "DESPC", "DGATE", "DGNMO", "DMSAS", "DOFER", "DOFRB", "DOGUB", "DYOBY", "EBEBK", "EDATA", "EDIP", "EFOR", "EGEPO", "EGGUB", "EGPRO", "EKGYO", "EKSUN", "ELITE", "EMPAE", "ENJSA", "EREGL", "ESCOM", "EUPWR", "EYGYO", "FADE", "FONET", "FORMT", "FORTE", "FRMPL", "FZLGY", "GEDZA", "GENIL", "GENKM", "GENTS", "GEREL", "GESAN", "GLRMK", "GOKNR", "GOLTS", "GOODY", "GRSEL", "GRTHO", "GUBRF", "GUNDG", "HATSN", "HKTM", "HOROZ", "HRKET", "IDGYO", "IHEVA", "IHLAS", "IHLGM", "IHYAY", "IMASM", "INTEM", "ISDMR", "ISSEN", "IZFAS", "IZINV", "JANTS", "KARSN", "KATMR", "KBORU", "KCAER", "KIMMR", "KLSYN", "KNFRT", "KOCMT", "KONKA", "KONTR", "KONYA", "KOPOL", "KOTON", "KRDMA", "KRDMB", "KRDMD", "KRGYO", "KRONT", "KRPLS", "KRSTL", "KRVGD", "KTLEV", "KUTPO", "KUYAS", "KZBGY", "LKMNH", "LMKDC", "LOGO", "LXGYO", "MAGEN", "MAKIM", "MARBL", "MAVI", "MCARD", "MEDTR", "MEKAG", "MERCN", "MEYSU", "MNDRS", "MNDTR", "MOBTL", "MPARK", "NETAS", "NTGAZ", "OBAMS", "OBASE", "OFSYM", "ONCSM", "ORGE", "OSTIM", "OZRDN", "OZYSR", "PAGYO", "PARSN", "PASEU", "PENGD", "PENTA", "PETKM", "PETUN", "PKART", "PLTUR", "PNLSN", "POLHO", "QUAGR", "RGYAS", "RNPOL", "RODRG", "RUBNS", "SAFKR", "SAMAT", "SANEL", "SANKO", "SARKY", "SAYAS", "SEKUR", "SELEC", "SELVA", "SILVR", "SMART", "SMRTG", "SNGYO", "SNICA", "SOKE", "SRVGY", "SUNTK", "SURGY", "SUWEN", "TARKM", "TDGYO", "TEZOL", "TKNSA", "TMSN", "TOASO", "TRILC", "TSPOR", "TUCLK", "TUKAS", "TUPRS", "TURGG", "TUREX", "ULAS", "ULKER", "ULUFA", "ULUSE", "UNLU", "USAK", "VAKFN", "VANGD", "VBTYZ", "VERTU", "VESBE", "VESTL", "YEOTK", "YGGYO", "YGYO", "YUNSA", "YYLGD", "ZEDUR"]
 
@@ -50,38 +56,17 @@ def analiz_motoru(hisse, vade="1d"):
 def ai_sinyal_uret(res):
     try:
         prompt = f"""
-        Sen profesyonel bir hedge fon traderısın ve tamamen sistematik işlem yaparsın.
-        Aşağıdaki veriyi analiz et ve hem SKOR hem de NET TRADE KARARI üret:
+        Sen profesyonel bir hedge fon traderısın. Tamamen sistematik işlem yaparsın.
+        HİSSE: {res['ticker']} | FİYAT: {res['fiyat']} TL | RSI: {round(res['rsi'],1)} | SMA200: {round(res['s200'],2)} | EMA9: {round(res['ema9'],2)} | EMA21: {round(res['ema21'],2)} | HEDEF: {round(res['u_b'],2)} | HACİM: {res['hacim']}
 
-        HİSSE: {res['ticker']}
-        FİYAT: {res['fiyat']} TL
-        RSI: {round(res['rsi'],1)}
-        SMA200: {round(res['s200'],2)}
-        EMA9: {round(res['ema9'],2)}
-        EMA21: {round(res['ema21'],2)}
-        HEDEF (Bollinger üst): {round(res['u_b'],2)}
-        HACİM DURUMU: {res['hacim']}
-
-        ------------------------
-        SKORLAMA KURALLARI:
-        Trend: Fiyat > SMA200 → +2 puan | Fiyat < SMA200 → -2 puan
-        EMA Yapısı: EMA9 > EMA21 → +1 puan | EMA9 < EMA21 → -1 puan
-        RSI: 45–60 arası → +1 puan | 60–70 → 0 puan | >70 veya <45 → -1 puan
-        Hacim: POZİTİF → +1 puan | ZAYIF → 0 puan
-        Potansiyel: %5+ → +1 puan | %3–5 → 0 puan | <3 → -1 puan
-
-        ------------------------
-        KARAR SİSTEMİ:
-        Toplam skor: 4+ → "AL" | 2–3 → "BEKLE" | 1 ve altı → "SAT / UZAK DUR"
-
-        ------------------------
-        ÇIKTI FORMATI:
+        Aşağıdaki formatta net cevap ver:
         SKOR: X/6 | KARAR: (AL/BEKLE/SAT)
         GİRİŞ: ... | STOP-LOSS: ... | HEDEF: ... | RİSK/ÖDÜL: ...
-        STRATEJİ: (Kısa teknik açıklama)
+        STRATEJİ: (Teknik yorum)
         """
         comp = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama-3.3-70b-versatile")
-        return comp.choices[0].message.content.replace("*", "").replace("_", "").replace("#", "")
+        raw_text = comp.choices[0].message.content
+        return raw_text.replace("*", "").replace("#", "") # Markdown temizliği
     except: return "Analiz yapılamadı."
 
 def rapor_gonder(liste, vade, baslik):
@@ -96,7 +81,6 @@ def rapor_gonder(liste, vade, baslik):
     en_iyi = sorted(havuz, key=lambda x: x['pot'], reverse=True)[:3]
     
     for t in en_iyi:
-        # Grafik Hazırla
         fig, ax = plt.subplots(figsize=(10, 5))
         df_p = t["df"].tail(50)
         ax.plot(df_p['Close'].values, color='#2ecc71', label="Fiyat")
@@ -105,15 +89,15 @@ def rapor_gonder(liste, vade, baslik):
         ax.legend(); ax.grid(True, alpha=0.1)
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0); plt.close()
         
-        # AI Stratejisi
         strateji = ai_sinyal_uret(t)
         
-        # --- DEĞİŞİKLİK BURADA: FOTO VE YAZIYI AYIRDIK ---
-        # 1. Önce sadece grafik ve kısa başlık
-        bot.send_photo(MY_ID, buf, caption=f"📈 #{t['ticker']} ANALİZİ (%{t['success']} Başarı)")
+        # --- HATA ÖNLEYİCİ GÖNDERİM ---
+        # 1. Fotoğrafı caption olmadan gönder (Hata riski sıfır)
+        bot.send_photo(MY_ID, buf)
         
-        # 2. Sonra uzun teknik rapor (Ayrı mesaj - Sınır 4096 karakter)
-        bot.send_message(MY_ID, f"📄 <b>TEKNİK RAPOR:</b>\n\n{strateji}", parse_mode="HTML")
+        # 2. Metni güvenli karakter temizliği yaparak gönder
+        clean_msg = f"*#{t['ticker']} TEKNİK RAPOR*\n\n{escape_markdown(strateji)}"
+        bot.send_message(MY_ID, clean_msg, parse_mode="MarkdownV2")
         
         time.sleep(1.5)
 
