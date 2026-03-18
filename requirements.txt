@@ -2,7 +2,6 @@ pyTelegramBotAPI
 yfinance
 pandas_ta
 matplotlib
-google-generativeai
 flask
 requests
-google-genai
+groq
