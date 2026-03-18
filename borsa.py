@@ -64,7 +64,7 @@ def analiz_motoru(hisse, vade="1d"):
     except: return None
 
 def rapor_gonder(liste, vade, baslik):
-    bot.send_message(MY_ID, f"🚀 {baslik} Analiz Başladı Emir Bey...\n(215 Hisse taranıp en iyi 5 fırsat seçilecek)")
+    bot.send_message(MY_ID, f"🚀 {baslik} Analiz Başladı Emir Bey...\n(215 Hisse taranıp en iyi 3 fırsat seçilecek)")
     havuz = []
     for h in liste:
         res = analiz_motoru(h, vade)
@@ -72,7 +72,7 @@ def rapor_gonder(liste, vade, baslik):
             havuz.append(res)
         time.sleep(0.05)
 
-    en_iyi = sorted(havuz, key=lambda x: x['pot'], reverse=True)[:5]
+    en_iyi = sorted(havuz, key=lambda x: x['pot'], reverse=True)[:3]
     if not en_iyi:
         bot.send_message(MY_ID, f"⚠️ {baslik} kriterlerine uygun hisse bulunamadı.")
         return
