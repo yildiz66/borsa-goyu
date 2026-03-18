@@ -90,8 +90,8 @@ def rapor_gonder(liste, vade, baslik):
 
     # GEMINI KARAR MEKANİZMASI (GÜNCELLENMİŞ)
     try:
-        time.sleep(5) 
-        prompt = (f"Sen borsa stratejistisin. {baslik} vade için şu 5 hisse teknik elemeyi geçti: {', '.join(ai_summary_list)}. "
+        time.sleep(15) 
+        prompt = (f"Sen borsa stratejistisin. {baslik} vade için şu 3 hisse teknik elemeyi geçti: {', '.join(ai_summary_list)}. "
                   "Bu hisseleri haber ve sektör durumuna göre yorumla. "
                   "Emir Bey'e her biri için net 'AL' veya 'BEKLE' tavsiyesi ver ve 1 cümlelik nedenini açıkla.")
         response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
