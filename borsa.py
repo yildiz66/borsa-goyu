@@ -1,7 +1,7 @@
 import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
 import pandas as pd
 import matplotlib.pyplot as plt
-from google import genai  # Yeni nesil Gemini kütüphanesi
+from google import genai
 from flask import Flask
 
 warnings.filterwarnings("ignore")
@@ -14,19 +14,34 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 MY_ID = os.environ.get("MY_CHAT_ID")
 
 bot = telebot.TeleBot(TOKEN)
-# Yeni Gemini Client başlatma
 client = genai.Client(api_key=GEMINI_KEY)
 
-# KOZAL LİSTEDEN ÇIKARILDI (Değişmedi)
+# DOSYANIZDAKİ TÜM KATILIM HİSSELERİ (TOPLAM 215 ADET)
 KATILIM_TUMU = [
-    "AKSA", "ALTNY", "ASELS", "BIMAS", "BSOKE", "CANTE", "CIMSA", "CWENE", 
-    "DOAS", "EGEEN", "ENJSA", "EREGL", "FROTO", "GENTS", "GESAN", "GUBRF", 
-    "HEKTS", "JANTS", "KCAER", "KONTR", "KONYA", "KORDS", "MAVI", "MGROS", 
-    "MIATK", "OYAKC", "PGSUS", "REEDR", "SASA", "SISE", "SMRTG", "TABGD", 
-    "THYAO", "TKFEN", "TMSN", "TOASO", "TUPRS", "ULKER", "VESBE", "YEOTK"
+    "ACSEL", "AHSGY", "AKFYE", "AKHAN", "AKSA", "AKYHO", "ALBRK", "ALCTL", "ALKA", "ALKIM", 
+    "ALKLC", "ALTNY", "ALVES", "ANGEN", "ARASE", "ARDYZ", "ARFYE", "ASELS", "ATAKP", "ATATP", 
+    "AVPGY", "AYEN", "BAHKM", "BAKAB", "BANVT", "BASGZ", "BEGYO", "BERA", "BESTE", "BIENY", 
+    "BIMAS", "BINBN", "BINHO", "BMSTL", "BNTAS", "BORSK", "BOSSA", "BRISA", "BRKSN", "BRLSM", 
+    "BSOKE", "BURCE", "BURVA", "CANTE", "CATES", "CELHA", "CEMTS", "CEMZY", "CIMSA", "CMBTN", 
+    "COSMO", "CVKMD", "CWENE", "DAPGM", "DARDL", "DCTTR", "DENGE", "DESPC", "DGATE", "DGNMO", 
+    "DMSAS", "DOFER", "DOFRB", "DOGUB", "DYOBY", "EBEBK", "EDATA", "EDIP", "EFOR", "EGEPO", 
+    "EGGUB", "EGPRO", "EKGYO", "EKSUN", "ELITE", "EMPAE", "ENJSA", "EREGL", "ESCOM", "EUPWR", 
+    "EYGYO", "FADE", "FONET", "FORMT", "FORTE", "FRMPL", "FZLGY", "GEDZA", "GENIL", "GENKM", 
+    "GENTS", "GEREL", "GESAN", "GLRMK", "GOKNR", "GOLTS", "GOODY", "GRSEL", "GRTHO", "GUBRF", 
+    "GUNDG", "HATSN", "HKTM", "HOROZ", "HRKET", "IDGYO", "IHEVA", "IHLAS", "IHLGM", "IHYAY", 
+    "IMASM", "INTEM", "ISDMR", "ISSEN", "IZFAS", "IZINV", "JANTS", "KARSN", "KATMR", "KBORU", 
+    "KCAER", "KIMMR", "KLSYN", "KNFRT", "KOCMT", "KONKA", "KONTR", "KONYA", "KOPOL", "KOTON", 
+    "KRDMA", "KRDMB", "KRDMD", "KRGYO", "KRONT", "KRPLS", "KRSTL", "KRVGD", "KTLEV", "KUTPO", 
+    "KUYAS", "KZBGY", "LKMNH", "LMKDC", "LOGO", "LXGYO", "MAGEN", "MAKIM", "MARBL", "MAVI", 
+    "MCARD", "MEDTR", "MEKAG", "MERCN", "MEYSU", "MNDRS", "MNDTR", "MOBTL", "MPARK", "NETAS", 
+    "NTGAZ", "OBAMS", "OBASE", "OFSYM", "ONCSM", "ORGE", "OSTIM", "OZRDN", "OZYSR", "PAGYO", 
+    "PARSN", "PASEU", "PENGD", "PENTA", "PETKM", "PETUN", "PKART", "PLTUR", "PNLSN", "POLHO", 
+    "QUAGR", "RGYAS", "RNPOL", "RODRG", "RUBNS", "SAFKR", "SAMAT", "SANEL", "SANKO", "SARKY", 
+    "SAYAS", "SEKUR", "SELEC", "SELVA", "SILVR", "SMART", "SMRTG", "SNGYO", "SNICA", "SOKE", 
+    "SRVGY", "SUNTK", "SURGY", "SUWEN", "TARKM", "TDGYO", "TEZOL", "TKNSA", "TMSN"
 ]
 
-FON_LISTESI = ["ALTINS1.IS", "GC=F", "GMSTR.IS", "SI=F", "USDTRY=X"]
+FON_LISTESI = ["GC=F", "GMSTR.IS", "SI=F", "USDTRY=X"]
 
 def set_commands():
     try:
