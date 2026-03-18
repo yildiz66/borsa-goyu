@@ -1,7 +1,7 @@
 import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
 import pandas as pd
 import matplotlib.pyplot as plt
-import google.generativeai as genai
+from google import genai  # Yeni nesil Gemini kütüphanesi
 from flask import Flask
 
 warnings.filterwarnings("ignore")
@@ -14,10 +14,10 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 MY_ID = os.environ.get("MY_CHAT_ID")
 
 bot = telebot.TeleBot(TOKEN)
-genai.configure(api_key=GEMINI_KEY)
-ai_model = genai.GenerativeModel('gemini-1.5-flash')
+# Yeni Gemini Client başlatma
+client = genai.Client(api_key=GEMINI_KEY)
 
-# KOZAL LİSTEDEN ÇIKARILDI
+# KOZAL LİSTEDEN ÇIKARILDI (Değişmedi)
 KATILIM_TUMU = [
     "AKSA", "ALTNY", "ASELS", "BIMAS", "BSOKE", "CANTE", "CIMSA", "CWENE", 
     "DOAS", "EGEEN", "ENJSA", "EREGL", "FROTO", "GENTS", "GESAN", "GUBRF", 
@@ -47,7 +47,6 @@ def analiz_motoru(hisse, donem="1d"):
         ticker = hisse.upper().strip()
         f_t = ticker if ("=" in ticker or ".IS" in ticker) else f"{ticker}.IS"
         
-        # Yahoo Finance verisi
         df = yf.download(f_t, period="2y", interval=donem, progress=False, threads=False, timeout=7)
         
         if df is None or df.empty or len(df) < 15: return None
@@ -83,20 +82,25 @@ def rapor_gonder(liste, vade, baslik):
     ai_data = []
     for t in en_iyi:
         pot = round(((t["ust"] - t["fiyat"]) / t["fiyat"]) * 100, 1)
-        ai_data.append(f"{t['ticker']}(%{pot})")
+        ai_data.append(f"{t['ticker']}: Fiyat {round(t['fiyat'],2)}, RSI {round(t['rsi'],1)}, Potansiyel %{pot}")
         
         plt.figure(figsize=(4, 2)); plt.plot(t["df"]["Close"].tail(20).values, color='green'); plt.axis('off')
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0)
         bot.send_photo(MY_ID, buf, caption=f"💎 *{t['ticker']}*\nFiyat: {round(t['fiyat'], 2)} | RSI: {round(t['rsi'], 1)} | Pot: %{pot}")
         plt.close()
 
+    # YENİ GEMINI ANALİZ BLOĞU
     try:
-        prompt = f"Borsa uzmanı olarak bu hisseleri yorumla: {ai_data}"
-        bot.send_message(MY_ID, f"🤖 *Gemini:* {ai_model.generate_content(prompt).text}")
-    except: pass
+        if ai_data:
+            prompt = f"Bir borsa uzmanı olarak bu teknik verileri ({baslik} vade) yorumla: {ai_data}. Emir Bey'e kısa, net ve profesyonel bir analiz sun."
+            # Gemini 2.0 Flash kullanımı
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            bot.send_message(MY_ID, f"🤖 *Gemini Analizi:*\n\n{response.text}", parse_mode="Markdown")
+    except Exception as e:
+        print(f"Gemini Hatası: {e}")
 
 @bot.message_handler(commands=['start'])
-def start(m): bot.send_message(m.chat.id, "📈 Terminal Hazır. KOZAL çıkarıldı, tüm listeler güncel.")
+def start(m): bot.send_message(m.chat.id, "📈 Terminal Hazır. Yeni Gemini 2.0 motoru devrede.")
 
 @bot.message_handler(commands=['gunluk'])
 def cmd_1(m): rapor_gonder(KATILIM_TUMU, "1d", "GÜNLÜK")
@@ -111,7 +115,6 @@ def cmd_3(m): rapor_gonder(KATILIM_TUMU, "1mo", "AYLIK")
 def cmd_4(m): rapor_gonder(FON_LISTESI, "1d", "METAL/DÖVİZ")
 
 if __name__ == "__main__":
-    # Conflict hatasını önlemek için webhook'u temizle
     requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True")
     time.sleep(1)
     set_commands()
