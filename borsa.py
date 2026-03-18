@@ -7,7 +7,6 @@ from flask import Flask
 warnings.filterwarnings("ignore")
 app = Flask(__name__)
 
-# --- AYARLAR ---
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROG_API_KEY = os.environ.get("GROG_API_KEY") 
 MY_ID = os.environ.get("MY_CHAT_ID")
@@ -21,7 +20,6 @@ KATILIM_TUMU = ["ACSEL", "AHSGY", "AKFYE", "AKHAN", "AKSA", "AKYHO", "ALBRK", "A
 @app.route('/')
 def home(): return "Sistem Aktif", 200
 
-# --- ANALİZ MOTORU ---
 def analiz_motoru(hisse, vade="1d"):
     try:
         f_t = f"{hisse.upper().strip()}.IS"
@@ -29,44 +27,45 @@ def analiz_motoru(hisse, vade="1d"):
         if df is None or df.empty or len(df) < 201: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
+        # Göstergeler
         df["EMA9"] = ta.ema(df["Close"], length=9)
         df["EMA21"] = ta.ema(df["Close"], length=21)
         df["SMA200"] = ta.sma(df["Close"], length=200)
         df["RSI"] = ta.rsi(df["Close"], length=14)
+        df["VOL_AVG"] = ta.sma(df["Volume"], length=20) # 20 Günlük Hacim Ortalaması
         bb = ta.bbands(df["Close"], length=20)
         
         last = df.iloc[-1]
         c_p = float(last["Close"])
         u_b = float(bb.iloc[-1, 2])
+        
+        # HACİM KONTROLÜ: Bugünkü hacim ortalamanın üzerinde mi?
+        hacim_onay = "POZİTİF ✅" if last["Volume"] > last["VOL_AVG"] else "ZAYIF ⚠️"
         success_rate = (df[df["Close"] > df["SMA200"]].pct_change()["Close"] > 0).mean() * 100
 
         return {
             "ticker": hisse, "fiyat": c_p, "rsi": float(last["RSI"]), 
             "pot": ((u_b - c_p) / c_p) * 100, "u_b": u_b, "s200": float(last["SMA200"]),
             "ema9": float(last["EMA9"]), "ema21": float(last["EMA21"]),
-            "success": round(success_rate, 1), "df": df
+            "hacim": hacim_onay, "success": round(success_rate, 1), "df": df
         }
     except: return None
 
-# --- AI STRATEJİ ---
 def ai_sinyal_uret(res, vade):
     try:
-        if vade == "1d":
-            p = (f"{res['ticker']} {res['fiyat']} TL. Hedef {round(res['u_b'],2)} TL (%{round(res['pot'],1)}). "
-                 f"Stop {round(res['ema21'],2)} TL. Sadece 'Şuradan al, şuradan sat, kâr oranı şu' şeklinde net emir ver.")
-        else:
-            p = f"{res['ticker']} hissesi için {round(res['fiyat'],2)} fiyatıyla teknik analiz özeti yaz."
-        
+        p = (f"{res['ticker']} {res['fiyat']} TL. Hedef {round(res['u_b'],2)} TL. "
+             f"Hacim Durumu: {res['hacim']}. RSI: {round(res['rsi'],1)}. "
+             f"Sadece 'Şuradan al, şuradan sat, kâr şu' şeklinde net emir ver.")
         comp = client.chat.completions.create(messages=[{"role":"user","content":p}], model="llama-3.3-70b-versatile")
         return comp.choices[0].message.content.replace("*", "").replace("_", "").replace("#", "")
     except: return "Analiz yüklenemedi."
 
-# --- RAPOR GÖNDERME ---
 def rapor_gonder(liste, vade, baslik):
     bot.send_message(MY_ID, f"🚀 {baslik} ANALİZ BAŞLADI...")
     havuz = []
     for h in liste:
         res = analiz_motoru(h, vade)
+        # Filtreye HACİM de ekledik (İsteğe bağlı: Sadece hacmi pozitif olanları getir diyebiliriz)
         if res and res["fiyat"] > res["s200"] and 35 < res["rsi"] < 65:
             havuz.append(res)
         time.sleep(0.04)
@@ -76,7 +75,6 @@ def rapor_gonder(liste, vade, baslik):
         bot.send_message(MY_ID, "⚠️ Uygun hisse bulunamadı."); return
 
     for t in en_iyi:
-        # Grafik Çizimi
         fig, ax = plt.subplots(figsize=(10, 5))
         df_p = t["df"].tail(50)
         ax.plot(df_p['Close'].values, color='#2ecc71', label="Fiyat")
@@ -85,13 +83,12 @@ def rapor_gonder(liste, vade, baslik):
         ax.legend(); ax.grid(True, alpha=0.1)
         buf = io.BytesIO(); plt.savefig(buf, format="png"); buf.seek(0); plt.close()
         
-        # AI Stratejisi
         strateji = ai_sinyal_uret(t, vade)
         
-        # Senin istediğin o meşhur format (Caption içine)
         caption = (f"💎 #{t['ticker']} ({baslik})\n"
                    f"💰 Fiyat: {round(t['fiyat'],2)} TL\n"
                    f"🎯 Hedef: {round(t['u_b'],2)} TL (%{round(t['pot'],1)})\n"
+                   f"📊 Hacim: {t['hacim']}\n"
                    f"📈 Başarı: %{t['success']}\n"
                    f"📊 RSI: {round(t['rsi'],1)}\n\n"
                    f"🧠 AI: {strateji}")
@@ -99,7 +96,6 @@ def rapor_gonder(liste, vade, baslik):
         bot.send_photo(MY_ID, buf, caption=caption)
         time.sleep(1)
 
-# --- KOMUTLAR ---
 @bot.message_handler(commands=['gunluk'])
 def cmd_1(m): rapor_gonder(KATILIM_TUMU, "1d", "GÜNLÜK")
 
