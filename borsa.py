@@ -1,4 +1,4 @@
-import os, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
+import os, sqlite3, logging, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -10,6 +10,18 @@ import pytz
 import re
 
 warnings.filterwarnings("ignore")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("borsa.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger        = logging.getLogger("BorsaGozu")
+BOT_BASLANGIC = datetime.now()
+
 app       = Flask(__name__)
 TZ_TR     = pytz.timezone("Europe/Istanbul")
 scheduler = BackgroundScheduler(timezone=TZ_TR)
@@ -21,85 +33,153 @@ TOKEN        = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROG_API_KEY")
 MY_ID        = os.environ.get("MY_CHAT_ID")
 NEWSAPI_KEY  = os.environ.get("NEWSAPI_KEY", "")   # newsapi.org - ucretsiz
+GNEWS_KEY    = os.environ.get("GNEWS_API_KEY", "")  # gnews.io - ucretsiz (100 req/gun)
 
 bot    = telebot.TeleBot(TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
 
 # ----------------------------------------------------------------
-# TAHMIN GECMISI (bellekte)
+# VERITABANI (SQLite - kalici tahmin gecmisi)
 # ----------------------------------------------------------------
-TAHMIN_GECMISI = {}
+DB_YOLU = "tahminler.db"
+
+def db_baslat():
+    conn = sqlite3.connect(DB_YOLU)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS tahminler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anahtar TEXT UNIQUE,
+            ticker TEXT,
+            tarih TEXT,
+            tip TEXT,
+            al_fiyat REAL,
+            hedef REAL,
+            sl REAL,
+            tahmin_yuzde REAL,
+            gerceklesen REAL,
+            gercek_degisim REAL,
+            sonuc TEXT DEFAULT 'BEKLIYOR'
+        )
+    """)
+    conn.commit()
+    conn.close()
+    logger.info("Veritabani hazir: %s", DB_YOLU)
 
 def tahmin_kaydet(ticker, al_fiyat, hedef, sl, tahmin_yuzde, tip="SCALP"):
     tarih   = datetime.now(TZ_TR).strftime("%Y-%m-%d %H:%M")
     anahtar = f"{ticker}_{tarih}_{tip}"
-    TAHMIN_GECMISI[anahtar] = {
-        "ticker": ticker, "tarih": tarih, "tip": tip,
-        "al_fiyat": al_fiyat, "hedef": hedef, "sl": sl,
-        "tahmin_yuzde": tahmin_yuzde,
-        "gerceklesen": None, "gercek_degisim": None,
-        "sonuc": "BEKLIYOR"
-    }
+    try:
+        conn = sqlite3.connect(DB_YOLU)
+        c = conn.cursor()
+        c.execute("""
+            INSERT OR IGNORE INTO tahminler
+            (anahtar, ticker, tarih, tip, al_fiyat, hedef, sl, tahmin_yuzde, sonuc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'BEKLIYOR')
+        """, (anahtar, ticker, tarih, tip, al_fiyat, hedef, sl, tahmin_yuzde))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error("Tahmin kaydedilemedi: %s", e)
     return anahtar
 
 def tahminleri_guncelle():
     """Kapanista tahmin sonuclarini kontrol eder ve bildirir."""
     guncellenenler = []
-    for anahtar, t in TAHMIN_GECMISI.items():
-        if t["sonuc"] in ("KAZANDI", "KAYBETTI"):
-            continue
+    try:
+        conn = sqlite3.connect(DB_YOLU)
+        c = conn.cursor()
+        c.execute("SELECT anahtar, ticker, al_fiyat, hedef, sl, tip, tahmin_yuzde FROM tahminler WHERE sonuc='BEKLIYOR'")
+        bekleyenler = c.fetchall()
+        conn.close()
+    except Exception as e:
+        logger.error("Tahmin guncelleme DB hatasi: %s", e)
+        return guncellenenler
+    for row in bekleyenler:
+        anahtar, ticker, al_fiyat, hedef, sl, tip, tahmin_yuzde = row
         try:
-            df = yf.download(f"{t['ticker']}.IS", period="2d", interval="1d",
+            df = yf.download(f"{ticker}.IS", period="2d", interval="1d",
                              progress=False, timeout=8)
             if df is None or df.empty:
                 continue
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            gercek = float(df.iloc[-1]["Close"])
-            TAHMIN_GECMISI[anahtar]["gerceklesen"] = gercek
-            if t["al_fiyat"] and t["al_fiyat"] > 0:
-                gercek_degisim = ((gercek - t["al_fiyat"]) / t["al_fiyat"]) * 100
-                TAHMIN_GECMISI[anahtar]["gercek_degisim"] = round(gercek_degisim, 2)
-                if gercek >= t["hedef"]:
-                    TAHMIN_GECMISI[anahtar]["sonuc"] = "KAZANDI"
-                elif t["sl"] and gercek <= t["sl"]:
-                    TAHMIN_GECMISI[anahtar]["sonuc"] = "KAYBETTI"
-                else:
-                    TAHMIN_GECMISI[anahtar]["sonuc"] = "BEKLIYOR"
-                guncellenenler.append(TAHMIN_GECMISI[anahtar])
-        except:
+            gercek        = float(df.iloc[-1]["Close"])
+            gercek_degisim = None
+            if al_fiyat and al_fiyat > 0:
+                gercek_degisim = round(((gercek - al_fiyat) / al_fiyat) * 100, 2)
+            if gercek >= hedef:
+                sonuc = "KAZANDI"
+            elif sl and gercek <= sl:
+                sonuc = "KAYBETTI"
+            else:
+                sonuc = "BEKLIYOR"
+            conn2 = sqlite3.connect(DB_YOLU)
+            c2    = conn2.cursor()
+            c2.execute("""
+                UPDATE tahminler SET gerceklesen=?, gercek_degisim=?, sonuc=?
+                WHERE anahtar=?
+            """, (gercek, gercek_degisim, sonuc, anahtar))
+            conn2.commit()
+            conn2.close()
+            guncellenenler.append({
+                "ticker": ticker, "tip": tip, "sonuc": sonuc,
+                "tahmin_yuzde": tahmin_yuzde or 0,
+                "gercek_degisim": gercek_degisim or 0
+            })
+        except Exception as e:
+            logger.error("Tahmin guncellenemedi (%s): %s", ticker, e)
             continue
     return guncellenenler
 
 def tahmin_raporu_olustur():
     """Tum tahminlerin ozet raporunu olusturur."""
-    if not TAHMIN_GECMISI:
+    try:
+        conn = sqlite3.connect(DB_YOLU)
+        c    = conn.cursor()
+        c.execute("SELECT ticker, tip, tarih, tahmin_yuzde, al_fiyat, hedef, sonuc, gercek_degisim FROM tahminler ORDER BY tarih DESC LIMIT 20")
+        rows = c.fetchall()
+        kazandi_s  = c.execute("SELECT COUNT(*) FROM tahminler WHERE sonuc='KAZANDI'").fetchone()[0]
+        kaybetti_s = c.execute("SELECT COUNT(*) FROM tahminler WHERE sonuc='KAYBETTI'").fetchone()[0]
+        bekliyor_s = c.execute("SELECT COUNT(*) FROM tahminler WHERE sonuc='BEKLIYOR'").fetchone()[0]
+        conn.close()
+    except Exception as e:
+        logger.error("Tahmin raporu hatasi: %s", e)
+        return "Rapor olusturulamadi."
+    if not rows:
         return "Henuz kayitli tahmin yok."
-    satirlar = ["<b>TAHMIN RAPORU</b>", ""]
-    kazandi = kaybetti = bekliyor = 0
-    for anahtar, t in sorted(TAHMIN_GECMISI.items(), key=lambda x: x[1]["tarih"], reverse=True)[:20]:
-        if t["sonuc"] == "KAZANDI":
-            ikon = "KAZANDI"; kazandi += 1
-        elif t["sonuc"] == "KAYBETTI":
-            ikon = "KAYBETTI"; kaybetti += 1
-        else:
-            ikon = "BEKLIYOR"; bekliyor += 1
-
-        gercek_str = ""
-        if t["gercek_degisim"] is not None:
-            gercek_str = f" | Gercek: %{t['gercek_degisim']:+.1f}"
-
+    toplam = kazandi_s + kaybetti_s
+    basari = round((kazandi_s / toplam) * 100, 1) if toplam > 0 else 0
+    satirlar = [
+        "<b>TAHMIN RAPORU</b>", "",
+        f"Kazandi: {kazandi_s}  |  Kaybetti: {kaybetti_s}  |  Bekliyor: {bekliyor_s}",
+        f"Basari Orani: %{basari}  (toplam {toplam} kapali tahmin)", ""
+    ]
+    for row in rows:
+        ticker, tip, tarih, tahmin_yuzde, al_fiyat, hedef, sonuc, gercek_degisim = row
+        ikon       = "✅" if sonuc == "KAZANDI" else ("❌" if sonuc == "KAYBETTI" else "⏳")
+        gercek_str = f" | Gercek: %{gercek_degisim:+.1f}" if gercek_degisim is not None else ""
         satirlar.append(
-            f"{ikon} <b>{t['ticker']}</b> ({t['tip']}) {t['tarih']}\n"
-            f"   Tahmin: %{t['tahmin_yuzde']:+.1f} | Al: {t['al_fiyat']} | Hedef: {t['hedef']}{gercek_str}"
+            f"{ikon} <b>{ticker}</b> ({tip}) {tarih}\n"
+            f"   Tahmin: %{(tahmin_yuzde or 0):+.1f} | Al: {al_fiyat} | Hedef: {hedef}{gercek_str}"
         )
-
-    toplam = kazandi + kaybetti
-    basari = round((kazandi / toplam) * 100, 1) if toplam > 0 else 0
-    satirlar.insert(2, f"Kazandi: {kazandi}  |  Kaybetti: {kaybetti}  |  Bekliyor: {bekliyor}")
-    satirlar.insert(3, f"Basari Orani: %{basari}  (toplam {toplam} kapali tahmin)")
-    satirlar.insert(4, "")
     return "\n".join(satirlar)
+
+def hisse_kazanma_orani(ticker):
+    """Bir hissenin gecmis tahmin basari oranini dondurur (None = yeterli veri yok)."""
+    try:
+        conn = sqlite3.connect(DB_YOLU)
+        c    = conn.cursor()
+        c.execute("SELECT sonuc FROM tahminler WHERE ticker=? AND sonuc IN ('KAZANDI','KAYBETTI')", (ticker,))
+        rows = c.fetchall()
+        conn.close()
+        if not rows or len(rows) < 3:
+            return None
+        kazandi = sum(1 for r in rows if r[0] == "KAZANDI")
+        return kazandi / len(rows)
+    except Exception as e:
+        logger.error("Kazanma orani hatasi (%s): %s", ticker, e)
+        return None
 
 # ----------------------------------------------------------------
 # HABER & PIYASA BAGLAMLARI
@@ -553,26 +633,28 @@ def grafik_olustur(t, baslik_ek="", maden=False):
 # MESAJ FORMATLARI
 # ----------------------------------------------------------------
 def caption_olustur(t, mod, ai_yanit):
+    from datetime import timedelta
+    bugun  = datetime.now(TZ_TR)
+    yarin  = bugun + timedelta(days=1)
     etiketler = {
-        "GUNLUK_SCALP":   ("Ayni Gun Al-Sat (Scalp)",    "SCALP"),
-        "GUNLUK_SWING":   ("Ertesi Gun Pozisyon (Swing)", "SWING"),
-        "HAFTALIK":       ("Haftalik",                    "HAFTA"),
-        "IKI HAFTALIK":   ("Iki Haftalik",                "2HAFTA"),
-        "AYLIK":          ("Aylik",                       "AYLIK"),
+        "GUNLUK_SCALP":   ("Bugün Al-Sat",            "BUGUN",   f"📅 Hedef: Bugün {bugun.strftime('%d %B %Y')}"),
+        "GUNLUK_SWING":   ("Yarın Sat",               "YARIN",   f"📅 Hedef: Yarın {yarin.strftime('%d %B %Y')}"),
+        "HAFTALIK":       ("Bu Hafta İçinde Sat",     "HAFTALIK",f"📅 Hedef: Bu hafta içinde"),
+        "IKI HAFTALIK":   ("2 Hafta İçinde Sat",      "2HAFTA",  f"📅 Hedef: 2 hafta içinde"),
+        "AYLIK":          ("Bu Ay İçinde Sat",         "AYLIK",   f"📅 Hedef: Bu ay içinde"),
     }
-    label, tip_kisa = etiketler.get(mod, (mod, mod))
-    ikon = {"GUNLUK_SCALP":"", "GUNLUK_SWING":"", "HAFTALIK":"",
-            "IKI HAFTALIK":"", "AYLIK":""}
+    label, tip_kisa, tarih_str = etiketler.get(mod, (mod, mod, ""))
 
     return (
         f"<b>#{t['ticker']} | {label}</b>\n"
-        f"Fiyat: {round(t['fiyat'],2)} TL  |  Trend: {t['trend']}\n"
+        f"{tarih_str}\n"
+        f"Fiyat: {round(t['fiyat'],2)} TL  |  Yön: {t['trend']}\n"
         f"RSI: {round(t['rsi'],1)}  |  MACD: {t['macd']}\n"
         f"Hacim: {t['hacim']} ({t['hacim_oran']}x)\n"
-        f"Hedef (BB): {round(t['u_b'],2)} TL (%{round(t['pot'],1)})\n"
-        f"Stop-Loss: {t['sl']} TL  |  TP: {t['tp']} TL  |  R/R: 1:{t['rr']}\n"
-        f"Basari Orani: %{t['success']}\n"
-        f"\n<b>AI Emir:</b>\n<code>{ai_yanit}</code>"
+        f"Hedef Fiyat (BB): {round(t['u_b'],2)} TL (%{round(t['pot'],1)})\n"
+        f"Zarar Kes: {t['sl']} TL  |  Kâr Al: {t['tp']} TL  |  Risk/Kazanç: 1:{t['rr']}\n"
+        f"Geçmiş Başarı: %{t['success']}\n"
+        f"\n<b>Yapay Zeka Emri:</b>\n<code>{ai_yanit}</code>"
     )
 
 def maden_caption_olustur(res, vade_label, ai_yanit):
@@ -581,11 +663,11 @@ def maden_caption_olustur(res, vade_label, ai_yanit):
     return (
         f"<b>{res['ticker']} | {res['aciklama']} | {vade_label}</b>\n"
         f"Fiyat: {round(res['fiyat'],2)} {pb}  ({deg})\n"
-        f"Trend: {res['trend']}  |  RSI: {round(res['rsi'],1)}  |  MACD: {res['macd']}\n"
+        f"Yön: {res['trend']}  |  RSI: {round(res['rsi'],1)}  |  MACD: {res['macd']}\n"
         f"Hacim: {res['hacim']} ({res['hacim_oran']}x)\n"
-        f"Hedef: {round(res['u_b'],2)} {pb} (%{round(res['pot'],1)})\n"
-        f"SL: {res['sl']} {pb}  |  TP: {res['tp']} {pb}  |  R/R: 1:{res['rr']}\n"
-        f"\n<b>AI Emir:</b>\n<code>{ai_yanit}</code>"
+        f"Hedef Fiyat: {round(res['u_b'],2)} {pb} (%{round(res['pot'],1)})\n"
+        f"Zarar Kes: {res['sl']} {pb}  |  Kâr Al: {res['tp']} {pb}  |  Risk/Kazanç: 1:{res['rr']}\n"
+        f"\n<b>Yapay Zeka Emri:</b>\n<code>{ai_yanit}</code>"
     )
 
 # ----------------------------------------------------------------
@@ -877,34 +959,34 @@ def cmd_piyasa(m):
 @bot.message_handler(commands=["start", "yardim"])
 def cmd_start(m):
     bot.send_message(m.chat.id,
-        "<b>Borsa Gozu | Profesyonel Sinyal Botu</b>\n"
+        "<b>Borsa Gözü | Kişisel Hisse Sinyal Botu</b>\n"
         "\n"
-        "<b>HISSE SINYALLERI</b>\n"
-        "/gunluk - Scalp (ayni gun) + Swing (ertesi gun)\n"
-        "/haftalik - Haftalik pozisyonlar\n"
-        "/ikihaftalik - Iki haftalik pozisyonlar\n"
-        "/aylik - Aylik uzun vade\n"
+        "<b>HİSSE SİNYALLERİ</b>\n"
+        "/gunluk - Bugün al-sat + Yarın sat sinyalleri\n"
+        "/haftalik - Bu hafta içinde sat\n"
+        "/ikihaftalik - 2 hafta içinde sat\n"
+        "/aylik - Uzun vade (bu ay içinde sat)\n"
         "\n"
-        "<b>KIYMETLI MADENLER</b>\n"
-        "/altin - Altin ETF + global analizi\n"
-        "/altin haftalik - Haftalik altin\n"
-        "/gumus - Gumus ETF analizi\n"
-        "/madenler - Altin + gumus hepsi\n"
+        "<b>KIYMETLİ MADENLER</b>\n"
+        "/altin - Altın ETF + global altın analizi\n"
+        "/altin haftalik - Haftalık altın\n"
+        "/gumus - Gümüş ETF analizi\n"
+        "/madenler - Altın + gümüş hepsi\n"
         "\n"
-        "<b>TAHMIN & PIYASA</b>\n"
-        "/tahminler - Tahmin basari raporu\n"
-        "/piyasa - Canli kur + haberler\n"
+        "<b>TAHMİN & PİYASA</b>\n"
+        "/tahminler - Geçmiş tahmin başarı raporu\n"
+        "/piyasa - Canlı döviz + son haberler\n"
         "\n"
-        "<b>OTOMATIK RAPORLAR</b>\n"
-        "Sabah 09:50 - Gunluk scalp sinyalleri\n"
-        "Aksam 17:55 - Swing sinyalleri + tahmin sonuclari\n"
+        "<b>OTOMATİK RAPORLAR</b>\n"
+        "Sabah 09:50 → Bugün al-sat sinyalleri\n"
+        "Akşam 17:55 → Yarın sat sinyalleri + tahmin sonuçları\n"
         "\n"
-        "<b>Her sinyal icin:</b>\n"
-        "Grafik (Fiyat + RSI + MACD)\n"
-        "AI net al/sat fiyat emirleri\n"
-        "Stop-Loss, Take-Profit, Risk/Odul\n"
-        "Haber + piyasa bazli AI tahmini\n"
-        "Tahmin basari takibi",
+        "<b>Her sinyal için:</b>\n"
+        "📊 Grafik (Fiyat + RSI + MACD)\n"
+        "🤖 Yapay zeka al/sat fiyat emri\n"
+        "🛡 Zarar Kes ve Kâr Al seviyeleri\n"
+        "📅 Hangi güne ait olduğu\n"
+        "✅ Geçmiş tahmin başarı takibi",
         parse_mode="HTML"
     )
 
@@ -925,5 +1007,5 @@ if __name__ == "__main__":
         daemon=True
     ).start()
     print("Borsa Gozu Bot basladi.")
-    print("Otomatik: 09:50 scalp | 17:55 swing + tahmin guncelle")
+    print("Otomatik: 09:50 bugün al-sat | 17:55 yarın sat + tahmin guncelle")
     bot.infinity_polling()
