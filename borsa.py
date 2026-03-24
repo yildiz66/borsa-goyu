@@ -257,34 +257,41 @@ def piyasa_baglamı_olustur(hisse_ticker=""):
     return "\n".join(satirlar) if satirlar else ""
 
 # ----------------------------------------------------------------
-# KATILIM HISSELERI LISTESI
+# KATILIM HISSELERI LISTESI (Dinamik Yukleme)
 # ----------------------------------------------------------------
-KATILIM_TUMU = [
-    "ACSEL","AHSGY","AKFYE","AKHAN","AKSA","AKYHO","ALBRK","ALCTL","ALKA","ALKIM",
-    "ALKLC","ALTNY","ALVES","ANGEN","ARASE","ARDYZ","ARFYE","ASELS","ATAKP","ATATP",
-    "AVPGY","AYEN","BAHKM","BAKAB","BANVT","BASGZ","BEGYO","BERA","BESTE","BIENY",
-    "BIMAS","BINBN","BINHO","BMSTL","BNTAS","BORSK","BOSSA","BRISA","BRKSN","BRLSM",
-    "BSOKE","BURCE","BURVA","CANTE","CATES","CELHA","CEMTS","CEMZY","CIMSA","CMBTN",
-    "COSMO","CVKMD","CWENE","DAPGM","DARDL","DCTTR","DENGE","DESPC","DGATE","DGNMO",
-    "DMSAS","DOFER","DOFRB","DOGUB","DYOBY","EBEBK","EDATA","EDIP","EFOR","EGEPO",
-    "EGGUB","EGPRO","EKGYO","EKSUN","ELITE","EMPAE","ENJSA","EREGL","ESCOM","EUPWR",
-    "EYGYO","FADE","FONET","FORMT","FORTE","FRMPL","FZLGY","GEDZA","GENIL","GENKM",
-    "GENTS","GEREL","GESAN","GLRMK","GOKNR","GOLTS","GOODY","GRSEL","GRTHO","GUBRF",
-    "GUNDG","HATSN","HKTM","HOROZ","HRKET","IDGYO","IHEVA","IHLAS","IHLGM","IHYAY",
-    "IMASM","INTEM","ISDMR","ISSEN","IZFAS","IZINV","JANTS","KARSN","KATMR","KBORU",
-    "KCAER","KIMMR","KLSYN","KNFRT","KOCMT","KONKA","KONTR","KONYA","KOPOL","KOTON",
-    "KRDMA","KRDMB","KRDMD","KRGYO","KRONT","KRPLS","KRSTL","KRVGD","KTLEV","KUTPO",
-    "KUYAS","KZBGY","LKMNH","LMKDC","LOGO","LXGYO","MAGEN","MAKIM","MARBL","MAVI",
-    "MCARD","MEDTR","MEKAG","MERCN","MEYSU","MNDRS","MNDTR","MOBTL","MPARK","NETAS",
-    "NTGAZ","OBAMS","OBASE","OFSYM","ONCSM","ORGE","OSTIM","OZRDN","OZYSR","PAGYO",
-    "PARSN","PASEU","PENGD","PENTA","PETKM","PETUN","PKART","PLTUR","PNLSN","POLHO",
-    "QUAGR","RGYAS","RNPOL","RODRG","RUBNS","SAFKR","SAMAT","SANEL","SANKO","SARKY",
-    "SAYAS","SEKUR","SELEC","SELVA","SILVR","SMART","SMRTG","SNGYO","SNICA","SOKE",
-    "SRVGY","SUNTK","SURGY","SUWEN","TARKM","TDGYO","TEZOL","TKNSA","TMSN","TOASO",
-    "TRILC","TSPOR","TUCLK","TUKAS","TUPRS","TURGG","TUREX","ULAS","ULKER","ULUFA",
-    "ULUSE","UNLU","USAK","VAKFN","VANGD","VBTYZ","VERTU","VESBE","VESTL","YEOTK",
-    "YGGYO","YGYO","YUNSA","YYLGD","ZEDUR"
-]
+def katilim_listesi_yukle():
+    """Localdeki katilim.txt veya CSV dosyasindan hisseleri dinamik olarak okur."""
+    hisseler = set()
+    try:
+        if os.path.exists("katilim.txt"):
+            with open("katilim.txt", "r", encoding="utf-8") as f:
+                icerik = f.read()
+            # Virgul ile ayrilmis "AKSA.IS, ALTNY.IS" formatini parse eder
+            parcalar = [x.strip().replace(".IS", "").replace(".E", "") for x in icerik.split(",")]
+            for p in parcalar:
+                if p and len(p.split()) == 1: # gecerli ticker formatiysa
+                    hisseler.add(p)
+                    
+        elif os.path.exists("hisse_endeks_katilim_ds.csv"):
+            import csv
+            with open("hisse_endeks_katilim_ds.csv", "r", encoding="utf-8", errors="ignore") as f:
+                reader = csv.reader(f, delimiter=';')
+                for row in reader:
+                    if len(row) > 0 and row[0].endswith(".E"):
+                        ticker = row[0].replace(".E", "").strip()
+                        hisseler.add(ticker)
+    except Exception as e:
+        logger.error("Katilim listesi yuklenirken hata: %s", e)
+
+    # Eger dosyalar yuklenemediyse veya bossa, varsayilan kucuk bir liste dondur (Hata almamak icin)
+    if not hisseler:
+        logger.warning("Katilim dosyalari okunamadi, varsayilan statik liste kullaniliyor.")
+        hisseler = {"BIMAS", "THYAO", "ASELS", "TUPRS", "FROTO", "TTKOM", "KCHOL"}
+
+    return sorted(list(hisseler))
+
+KATILIM_TUMU = katilim_listesi_yukle()
+
 
 # ----------------------------------------------------------------
 # ALTIN & GUMUS ENSTRUMANLAR
