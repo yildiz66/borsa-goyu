@@ -707,14 +707,14 @@ def maden_caption_olustur(res, vade_label, ai_yanit):
     )
 
 def su_anki_vade_ve_mod_belirle():
-    """Saat 18:05 sonrasi ise yarinki swing'i, oncesi ise bugunku scalp'i dondurur."""
+    """Saat 17:00 sonrasi ise yarinki swing'i, oncesi ise bugunku scalp'i dondurur."""
     simdi = datetime.now(TZ_TR)
-    saat, dakika = simdi.hour, simdi.minute
+    saat = simdi.hour
     
-    # 18:05 ve sonrasi -> Yarinki market acilisi icin Swing
-    if (saat > 18) or (saat == 18 and dakika >= 5):
+    # 17:00 ve sonrasi -> Kapanisa dogru yarin icin pozisyon al (Swing)
+    if (saat >= 17):
         return "1d", "GUNLUK_SWING", "YARIN SAT (OTOMATIK)"
-    # 10:00 - 18:05 arasi -> Bugun icinde Scalp
+    # 10:00 - 17:00 arasi -> Bugun icinde Scalp
     elif (saat >= 10):
         return "1d", "GUNLUK_SCALP", "BUGUN AL-SAT (OTOMATIK)"
     # Sabah 10:00 oncesi -> Bugunku acilis icin Scalp/Swing
