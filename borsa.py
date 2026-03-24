@@ -18,7 +18,7 @@ scheduler = BackgroundScheduler(timezone=TZ_TR)
 # ORTAM DEGISKENLERI
 # ----------------------------------------------------------------
 TOKEN        = os.environ.get("TELEGRAM_TOKEN")
-GROG_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_API_KEY = os.environ.get("GROG_API_KEY")
 MY_ID        = os.environ.get("MY_CHAT_ID")
 NEWSAPI_KEY  = os.environ.get("NEWSAPI_KEY", "")   # newsapi.org - ucretsiz
 
