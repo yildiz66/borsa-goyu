@@ -321,18 +321,41 @@ def hesapla_sl_tp(df, fiyat, atr_carpan=1.5):
     except:
         return None, None, None
 
+def bist100_trend_kontrol():
+    """BIST100 piyasa yonunu kontrol eder (True = Guvenli, False = Riskli)."""
+    try:
+        df = yf.download("^XU100", period="2d", interval="1d", progress=False, timeout=8)
+        if df is None or df.empty: return True # Veri yoksa guvenli varsay
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        
+        c_p    = float(df.iloc[-1]["Close"])
+        prev_p = float(df.iloc[-2]["Close"])
+        degisim = ((c_p - prev_p) / prev_p) * 100
+        
+        # BIST100 gunluk %2'den fazla dusuyorsa riskli
+        if degisim < -2.0: return False
+        return True
+    except:
+        return True
+
 # ----------------------------------------------------------------
 # ANALIZ MOTORU (hisse)
 # ----------------------------------------------------------------
 def analiz_motoru(hisse, vade="1d"):
     try:
         ticker = f"{hisse.upper().strip()}.IS"
-        df = yf.download(ticker, period="2y", interval=vade,
+        # Daha saglikli MA verisi icin 2 yil yerine 2.5 yil cekelim (SMA200 daha stabil olur)
+        df = yf.download(ticker, period="3y", interval="1d",
                          progress=False, timeout=10)
         if df is None or df.empty or len(df) < 201:
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+
+        # VWAP Hesapla
+        # vwap = (Price * Volume) cum sum / Volume cum sum
+        # pandas_ta vwap genellikle intraday için. Manuel hesapliyoruz (gunluk bazda yaklasik)
+        df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
 
         df["EMA9"]    = ta.ema(df["Close"], length=9)
         df["EMA21"]   = ta.ema(df["Close"], length=21)
@@ -351,6 +374,7 @@ def analiz_motoru(hisse, vade="1d"):
         u_b   = float(bb.iloc[-1, 2])
         l_b   = float(bb.iloc[-1, 0])
         mid_b = float(bb.iloc[-1, 1])
+        vwap  = float(last["VWAP"])
 
         hacim_oran  = float(last["Volume"]) / float(last["VOL_AVG"]) if float(last["VOL_AVG"]) > 0 else 1
         hacim_durum = "GUCLU" if hacim_oran > 1.5 else ("POZITIF" if hacim_oran > 1.0 else "ZAYIF")
@@ -359,7 +383,11 @@ def analiz_motoru(hisse, vade="1d"):
         ema21 = float(last["EMA21"])
         ema50 = float(last["EMA50"])
         s200  = float(last["SMA200"])
-        trend = "YUKARI" if (c_p > s200 and ema9 > ema21) else ("YATAY" if abs(c_p - s200)/s200 < 0.03 else "ASAGI")
+        
+        # Trend Gucu: Fiyat SMA200 ustunde ve EMA9 > EMA21 ise GUCLU
+        trend = "GUCLU YUXARI" if (c_p > s200 and ema9 > ema21 and c_p > vwap) else \
+                "YUKARI" if (c_p > s200 or ema9 > ema21) else \
+                "YATAY" if abs(c_p - s200)/s200 < 0.03 else "ASAGI"
 
         macd_sinyal = "AL" if (float(last["MACD"]) > float(last["MACD_S"]) and
                                 float(prev["MACD"]) <= float(prev["MACD_S"])) else \
@@ -372,13 +400,14 @@ def analiz_motoru(hisse, vade="1d"):
 
         return {
             "ticker": hisse, "fiyat": c_p, "rsi": float(last["RSI"]),
-            "pot": pot, "u_b": u_b, "l_b": l_b, "mid_b": mid_b,
+            "pot": pot, "u_b": u_b, "l_b": l_b, "mid_b": mid_b, "vwap": vwap,
             "s200": s200, "ema9": ema9, "ema21": ema21, "ema50": ema50,
             "hacim": hacim_durum, "hacim_oran": round(hacim_oran, 2),
             "trend": trend, "macd": macd_sinyal,
             "success": success, "sl": sl, "tp": tp, "rr": rr, "df": df
         }
-    except:
+    except Exception as e:
+        logger.error("Analiz motoru hatasi (%s): %s", hisse, e)
         return None
 
 # ----------------------------------------------------------------
@@ -644,8 +673,12 @@ def caption_olustur(t, mod, ai_yanit):
         "AYLIK":          ("Bu Ay İçinde Sat",         "AYLIK",   f"📅 Hedef: Bu ay içinde"),
     }
     label, tip_kisa, tarih_str = etiketler.get(mod, (mod, mod, ""))
+    
+    # En iyi hisse ise yildiz ekle
+    yildiz = "⭐ <b>GÜNÜN EN İYİ ADAYI</b> ⭐\n" if t.get("en_iyi") else ""
 
     return (
+        f"{yildiz}"
         f"<b>#{t['ticker']} | {label}</b>\n"
         f"{tarih_str}\n"
         f"Fiyat: {round(t['fiyat'],2)} TL  |  Yön: {t['trend']}\n"
@@ -670,28 +703,66 @@ def maden_caption_olustur(res, vade_label, ai_yanit):
         f"\n<b>Yapay Zeka Emri:</b>\n<code>{ai_yanit}</code>"
     )
 
+def su_anki_vade_ve_mod_belirle():
+    """Saat 18:05 sonrasi ise yarinki swing'i, oncesi ise bugunku scalp'i dondurur."""
+    simdi = datetime.now(TZ_TR)
+    saat, dakika = simdi.hour, simdi.minute
+    
+    # 18:05 ve sonrasi -> Yarinki market acilisi icin Swing
+    if (saat > 18) or (saat == 18 and dakika >= 5):
+        return "1d", "GUNLUK_SWING", "YARIN SAT (OTOMATIK)"
+    # 10:00 - 18:05 arasi -> Bugun icinde Scalp
+    elif (saat >= 10):
+        return "1d", "GUNLUK_SCALP", "BUGUN AL-SAT (OTOMATIK)"
+    # Sabah 10:00 oncesi -> Bugunku acilis icin Scalp/Swing
+    else:
+        return "1d", "GUNLUK_SCALP", "BUGUN ACILIS AL-SAT"
+
 # ----------------------------------------------------------------
 # FILTRELEME & SIRALAMA
 # ----------------------------------------------------------------
 def filtrele_sirala(havuz, mod):
+    # Piyasa kotuyse filtrele (Opsiyonel: Kullanici kesin para kazanmak istiyor)
+    if not bist100_trend_kontrol():
+        logger.warning("Piyasa (BIST100) riskli gorunuyor, filtreler sikilastirildi.")
+        devam_et = False # Cok guclu sinyal yoksa dondurme
+    else:
+        devam_et = True
+
     sonuc = []
     for res in havuz:
+        # Kazanma orani filtresi (%40 alti ise alma)
+        k_orani = hisse_kazanma_orani(res["ticker"])
+        if k_orani is not None and k_orani < 0.40:
+            continue
+
         if mod == "GUNLUK_SCALP":
-            if (40 < res["rsi"] < 60 and res["hacim_oran"] >= 1.0 and res["ema9"] > res["ema21"]):
+            # Scalp: RSI orta seviyelerde, hacim pozitif, EMA9 > EMA21 ve Fiyat > VWAP
+            if (35 < res["rsi"] < 65 and res["hacim_oran"] >= 0.9 and 
+                res["ema9"] > res["ema21"] and res["fiyat"] > res["vwap"]):
                 sonuc.append(res)
         elif mod == "GUNLUK_SWING":
-            if (res["fiyat"] > res["s200"] and 35 < res["rsi"] < 65 and res["ema9"] > res["ema21"]):
+            # Swing: Ana trend (SMA200) yukari, RSI asiri alimda degil
+            if (res["fiyat"] > res["s200"] and 30 < res["rsi"] < 68 and 
+                res["ema9"] > res["ema21"]):
                 sonuc.append(res)
         elif mod == "HAFTALIK":
-            if res["fiyat"] > res["s200"] and 35 < res["rsi"] < 68:
+            if res["fiyat"] > res["s200"] and 35 < res["rsi"] < 70:
                 sonuc.append(res)
-        elif mod == "IKI HAFTALIK":
-            if res["fiyat"] > res["s200"] and 30 < res["rsi"] < 70:
+        else:
+            # Diger vadeler (Aylik vb.)
+            if res["fiyat"] > res["s200"] and res["rsi"] < 72:
                 sonuc.append(res)
-        elif mod == "AYLIK":
-            if res["fiyat"] > res["s200"] and res["rsi"] < 72 and (res["rr"] or 0) >= 1.5:
-                sonuc.append(res)
-    return sorted(sonuc, key=lambda x: x["pot"], reverse=True)[:3]
+
+    # Potansiyele (Bollinger Ust Bandina uzaklik) gore sirala
+    sirali = sorted(sonuc, key=lambda x: x["pot"], reverse=True)[:3]
+    
+    # En iyi 1 tanesini isaretle
+    if sirali:
+        for i, s in enumerate(sirali):
+            sirali[i]["en_iyi"] = (i == 0) # Ilk siradaki en iyisi
+            
+    return sirali
 
 # ----------------------------------------------------------------
 # RAPOR GONDER (ana fonksiyon)
@@ -880,7 +951,8 @@ scheduler.add_job(otomatik_aksam, "cron", hour=17, minute=55)
 # ----------------------------------------------------------------
 @bot.message_handler(commands=["gunluk"])
 def cmd_gunluk(m):
-    threading.Thread(target=gunluk_tam_rapor, args=(KATILIM_TUMU,), daemon=True).start()
+    vade, mod, baslik = su_anki_vade_ve_mod_belirle()
+    threading.Thread(target=rapor_gonder, args=(KATILIM_TUMU, vade, mod, baslik), daemon=True).start()
 
 @bot.message_handler(commands=["haftalik"])
 def cmd_haftalik(m):
