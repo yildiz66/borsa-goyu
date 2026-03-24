@@ -7,3 +7,5 @@ groq
 flask
 requests
 schedule
+APScheduler
+pytz
