@@ -260,34 +260,30 @@ def piyasa_baglamı_olustur(hisse_ticker=""):
 # KATILIM HISSELERI LISTESI (Dinamik Yukleme)
 # ----------------------------------------------------------------
 def katilim_listesi_yukle():
-    """Localdeki katilim.txt veya CSV dosyasindan hisseleri dinamik olarak okur."""
+    """Localdeki hisse_endeks_katilim_ds.csv dosyasindan hisseleri dinamik olarak okur (Tekrarsiz)."""
     hisseler = set()
+    dosya_yolu = "hisse_endeks_katilim_ds.csv"
     try:
-        if os.path.exists("katilim.txt"):
-            with open("katilim.txt", "r", encoding="utf-8") as f:
-                icerik = f.read()
-            # Virgul ile ayrilmis "AKSA.IS, ALTNY.IS" formatini parse eder
-            parcalar = [x.strip().replace(".IS", "").replace(".E", "") for x in icerik.split(",")]
-            for p in parcalar:
-                if p and len(p.split()) == 1: # gecerli ticker formatiysa
-                    hisseler.add(p)
-                    
-        elif os.path.exists("hisse_endeks_katilim_ds.csv"):
+        if os.path.exists(dosya_yolu):
             import csv
-            with open("hisse_endeks_katilim_ds.csv", "r", encoding="utf-8", errors="ignore") as f:
+            with open(dosya_yolu, "r", encoding="utf-8", errors="ignore") as f:
                 reader = csv.reader(f, delimiter=';')
                 for row in reader:
+                    # Ilk sutunda ".E" ile biten bilesen kodlari (Orn: AKSA.E) bulunur.
                     if len(row) > 0 and row[0].endswith(".E"):
                         ticker = row[0].replace(".E", "").strip()
-                        hisseler.add(ticker)
+                        hisseler.add(ticker) # set oldugu icin tekrarlayanlar otomatik elenir
+        else:
+            logger.error("Katilim CSV dosyasi (%s) bulunamadi!", dosya_yolu)
     except Exception as e:
-        logger.error("Katilim listesi yuklenirken hata: %s", e)
+        logger.error("Katilim listesi CSV'den yuklenirken hata: %s", e)
 
     # Eger dosyalar yuklenemediyse veya bossa, varsayilan kucuk bir liste dondur (Hata almamak icin)
     if not hisseler:
-        logger.warning("Katilim dosyalari okunamadi, varsayilan statik liste kullaniliyor.")
+        logger.warning("Katilim CSV okunamadi, varsayilan statik liste kullaniliyor.")
         hisseler = {"BIMAS", "THYAO", "ASELS", "TUPRS", "FROTO", "TTKOM", "KCHOL"}
 
+    logger.info(f"Katilim endeksinden {len(hisseler)} adet benzersiz hisse yuku basariyla alindi.")
     return sorted(list(hisseler))
 
 KATILIM_TUMU = katilim_listesi_yukle()
