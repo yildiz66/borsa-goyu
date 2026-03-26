@@ -8,7 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import pytz
 import re
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
 
 warnings.filterwarnings("ignore")
 
@@ -1146,6 +1146,25 @@ def home():
 # ----------------------------------------------------------------
 if __name__ == "__main__":
     db_baslat()
+    
+    # Mavi Menu Komutlarini Ayarla
+    try:
+        bot.set_my_commands([
+            BotCommand("start", "Ana menü ve yardım"),
+            BotCommand("hisse", "Tek hisse analizi (Örn: /hisse THYAO)"),
+            BotCommand("gunluk", "Bugün al-sat + Yarın sat"),
+            BotCommand("haftalik", "Bu hafta içinde sat"),
+            BotCommand("ikihaftalik", "2 hafta içinde sat"),
+            BotCommand("aylik", "Uzun vade (aylık)"),
+            BotCommand("altin", "Altın fon & ETF analizi"),
+            BotCommand("gumus", "Gümüş fon & ETF analizi"),
+            BotCommand("madenler", "Tüm oymetli madenler"),
+            BotCommand("tahminler", "Geçmiş başarı ve AI raporu"),
+            BotCommand("piyasa", "Döviz ve güncel haberler")
+        ])
+    except Exception as e:
+        logger.error("Mavi menu komutlari ayarlanamadi: %s", e)
+
     scheduler.start()
     threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))),
