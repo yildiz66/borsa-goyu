@@ -347,11 +347,18 @@ def bist100_trend_kontrol():
 # ----------------------------------------------------------------
 def analiz_motoru(hisse, vade="1d"):
     try:
-        ticker = f"{hisse.upper().strip()}.IS"
+        hisse_clean = hisse.upper().strip()
+        # Eger zaten .IS, =X, =F veya ^ ile basliyorsa dokunma, yoksa .IS ekle
+        if not hisse_clean.endswith(".IS") and not any(x in hisse_clean for x in ["=", "^", "XU100"]):
+            ticker = f"{hisse_clean}.IS"
+        else:
+            ticker = hisse_clean
+            
         # Daha saglikli MA verisi icin 2 yil yerine 2.5 yil cekelim (SMA200 daha stabil olur)
         df = yf.download(ticker, period="3y", interval="1d",
                          progress=False, timeout=10)
         if df is None or df.empty or len(df) < 201:
+            logger.warning(f"Veri yetersiz: {ticker}")
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -972,41 +979,43 @@ def ana_menu_olustur():
 # TELEGRAM KOMUTLARI
 # ----------------------------------------------------------------
 @bot.message_handler(commands=["hisse"])
+@bot.message_handler(func=lambda m: m.text and m.text.lower().startswith("hisse"))
 def cmd_hisse(m):
     parca = m.text.strip().split()
     if len(parca) < 2:
-        bot.send_message(m.chat.id, "Lütfen bir hisse kodu girin. Örn: /hisse THYAO", reply_markup=ana_menu_olustur())
+        bot.send_message(m.chat.id, "Lütfen bir hisse kodu girin.\nÖrn: <code>/hisse THYAO</code> veya sadece <code>Hisse THYAO</code> yazabilirsiniz.", parse_mode="HTML", reply_markup=ana_menu_olustur())
         return
     
-    ticker = parca[1].upper()
+    ticker_input = parca[1].upper()
     
     def tek_hisse_islem():
         try:
-            bot.send_message(m.chat.id, f"<b>{ticker}</b> için analiz hazırlanıyor, lütfen bekleyin...", parse_mode="HTML")
-        except:
-            pass
-        
-        vade, mod, baslik = su_anki_vade_ve_mod_belirle()
-        res = analiz_motoru(ticker, vade)
-        if not res:
-            bot.send_message(m.chat.id, f"<b>{ticker}</b> için yeterli veri bulunamadı veya hisse kodu hatalı.", parse_mode="HTML")
-            return
+            bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor, lütfen bekleyin...", parse_mode="HTML")
             
-        piyasa = piyasa_baglamı_olustur()
-        ai_yanit = ai_sinyal_uret(res, mod, piyasa)
-        
-        al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, res["fiyat"])
-        if sat_f:
-            tahmin_kaydet(res["ticker"], al_f, sat_f, sl_f or res["sl"], kar_f, tip=f"TEK_{mod}")
+            vade, mod, baslik = su_anki_vade_ve_mod_belirle()
+            res = analiz_motoru(ticker_input, vade)
+            if not res:
+                bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için yeterli veri bulunamadı veya hisse kodu hatalı.\n(BIST hisselerini sadece kod olarak girin, örn: THYAO)", parse_mode="HTML")
+                return
+                
+            piyasa = piyasa_baglamı_olustur()
+            ai_yanit = ai_sinyal_uret(res, mod, piyasa)
             
-        buf = grafik_olustur(res, "TEK HİSSE SORGUSU")
-        caption = caption_olustur(res, mod, ai_yanit)
-        
-        try:
+            al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, res["fiyat"])
+            if sat_f:
+                tahmin_kaydet(res["ticker"], al_f, sat_f, sl_f or res["sl"], kar_f, tip=f"TEK_{mod}")
+                
+            buf = grafik_olustur(res, "TEK HİSSE SORGUSU")
+            caption = caption_olustur(res, mod, ai_yanit)
+            
             bot.send_photo(m.chat.id, buf, caption=caption, parse_mode="HTML", reply_markup=ana_menu_olustur())
+            
         except Exception as e:
-            logger.error("Hisse gonderim hatasi: %s", e)
-            bot.send_message(m.chat.id, f"{ticker} grafiği gönderilemedi.")
+            logger.error(f"Hisse islem hatasi ({ticker_input}): {e}")
+            try:
+                bot.send_message(m.chat.id, f"❌ <b>{ticker_input}</b> analizi sırasında bir hata oluştu.\nHata: {str(e)}", parse_mode="HTML")
+            except:
+                pass
 
     threading.Thread(target=tek_hisse_islem, daemon=True).start()
 
