@@ -8,6 +8,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import pytz
 import re
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 warnings.filterwarnings("ignore")
 
@@ -950,13 +951,31 @@ scheduler.add_job(otomatik_sabah, "cron", hour=9,  minute=50)
 scheduler.add_job(otomatik_aksam, "cron", hour=17, minute=55)
 
 # ----------------------------------------------------------------
+# KLAVYE MENUSU
+# ----------------------------------------------------------------
+def ana_menu_olustur():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(
+        KeyboardButton("📅 Günlük"),
+        KeyboardButton("📅 Haftalık"),
+        KeyboardButton("📅 İki Haftalık"),
+        KeyboardButton("📅 Aylık"),
+        KeyboardButton("🥇 Altın"),
+        KeyboardButton("🥈 Gümüş"),
+        KeyboardButton("💎 Tüm Madenler"),
+        KeyboardButton("📈 Tahminler"),
+        KeyboardButton("🌍 Piyasa")
+    )
+    return markup
+
+# ----------------------------------------------------------------
 # TELEGRAM KOMUTLARI
 # ----------------------------------------------------------------
 @bot.message_handler(commands=["hisse"])
 def cmd_hisse(m):
     parca = m.text.strip().split()
     if len(parca) < 2:
-        bot.send_message(m.chat.id, "Lütfen bir hisse kodu girin. Örn: /hisse THYAO")
+        bot.send_message(m.chat.id, "Lütfen bir hisse kodu girin. Örn: /hisse THYAO", reply_markup=ana_menu_olustur())
         return
     
     ticker = parca[1].upper()
@@ -984,7 +1003,7 @@ def cmd_hisse(m):
         caption = caption_olustur(res, mod, ai_yanit)
         
         try:
-            bot.send_photo(m.chat.id, buf, caption=caption, parse_mode="HTML")
+            bot.send_photo(m.chat.id, buf, caption=caption, parse_mode="HTML", reply_markup=ana_menu_olustur())
         except Exception as e:
             logger.error("Hisse gonderim hatasi: %s", e)
             bot.send_message(m.chat.id, f"{ticker} grafiği gönderilemedi.")
@@ -992,26 +1011,31 @@ def cmd_hisse(m):
     threading.Thread(target=tek_hisse_islem, daemon=True).start()
 
 @bot.message_handler(commands=["gunluk"])
+@bot.message_handler(func=lambda m: m.text == "📅 Günlük")
 def cmd_gunluk(m):
     vade, mod, baslik = su_anki_vade_ve_mod_belirle()
     threading.Thread(target=rapor_gonder, args=(KATILIM_TUMU, vade, mod, baslik), daemon=True).start()
 
 @bot.message_handler(commands=["haftalik"])
+@bot.message_handler(func=lambda m: m.text == "📅 Haftalık")
 def cmd_haftalik(m):
     threading.Thread(target=rapor_gonder,
         args=(KATILIM_TUMU, "1wk", "HAFTALIK", "HAFTALIK"), daemon=True).start()
 
 @bot.message_handler(commands=["ikihaftalik"])
+@bot.message_handler(func=lambda m: m.text == "📅 İki Haftalık")
 def cmd_ikihaftalik(m):
     threading.Thread(target=rapor_gonder,
         args=(KATILIM_TUMU, "1wk", "IKI HAFTALIK", "IKI HAFTALIK"), daemon=True).start()
 
 @bot.message_handler(commands=["aylik"])
+@bot.message_handler(func=lambda m: m.text == "📅 Aylık")
 def cmd_aylik(m):
     threading.Thread(target=rapor_gonder,
         args=(KATILIM_TUMU, "1mo", "AYLIK", "AYLIK"), daemon=True).start()
 
 @bot.message_handler(commands=["altin"])
+@bot.message_handler(func=lambda m: m.text == "🥇 Altın")
 def cmd_altin(m):
     parca = m.text.strip().split()
     vade, vade_label = "1d", "GUNLUK"
@@ -1023,6 +1047,7 @@ def cmd_altin(m):
         args=(vade, vade_label, "altin"), daemon=True).start()
 
 @bot.message_handler(commands=["gumus"])
+@bot.message_handler(func=lambda m: m.text == "🥈 Gümüş")
 def cmd_gumus(m):
     parca = m.text.strip().split()
     vade, vade_label = "1d", "GUNLUK"
@@ -1034,6 +1059,7 @@ def cmd_gumus(m):
         args=(vade, vade_label, "gumus"), daemon=True).start()
 
 @bot.message_handler(commands=["madenler"])
+@bot.message_handler(func=lambda m: m.text == "💎 Tüm Madenler")
 def cmd_madenler(m):
     parca = m.text.strip().split()
     vade, vade_label = "1d", "GUNLUK"
@@ -1045,6 +1071,7 @@ def cmd_madenler(m):
         args=(vade, vade_label, "hepsi"), daemon=True).start()
 
 @bot.message_handler(commands=["tahminler"])
+@bot.message_handler(func=lambda m: m.text == "📈 Tahminler")
 def cmd_tahminler(m):
     rapor = tahmin_raporu_olustur()
     try:
@@ -1053,6 +1080,7 @@ def cmd_tahminler(m):
         bot.send_message(m.chat.id, "Tahmin raporu olusturulamadi.")
 
 @bot.message_handler(commands=["piyasa"])
+@bot.message_handler(func=lambda m: m.text == "🌍 Piyasa")
 def cmd_piyasa(m):
     def gonder_piyasa():
         makro = doviz_makro_cek()
@@ -1102,7 +1130,8 @@ def cmd_start(m):
         "🛡 Zarar Kes ve Kâr Al seviyeleri\n"
         "📅 Hangi güne ait olduğu\n"
         "✅ Geçmiş tahmin başarı takibi",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=ana_menu_olustur()
     )
 
 # ----------------------------------------------------------------
