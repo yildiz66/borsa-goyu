@@ -206,7 +206,7 @@ def doviz_makro_cek():
             "EURTRY=X": "EUR/TRY",
             "GC=F":     "Altin(USD)",
             "BZ=F":     "Brent Petrol",
-            "^XU100":   "BIST100",
+            "XU100.IS":   "BIST100",
         }
         sonuc = {}
         for sembol, isim in semboller.items():
@@ -327,7 +327,7 @@ def hesapla_sl_tp(df, fiyat, atr_carpan=1.5):
 def bist100_trend_kontrol():
     """BIST100 piyasa yonunu kontrol eder (True = Guvenli, False = Riskli)."""
     try:
-        df = yf.download("^XU100", period="2d", interval="1d", progress=False, timeout=8)
+        df = yf.download("XU100.IS", period="2d", interval="1d", progress=False, timeout=8)
         if df is None or df.empty: return True # Veri yoksa guvenli varsay
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
@@ -952,6 +952,45 @@ scheduler.add_job(otomatik_aksam, "cron", hour=17, minute=55)
 # ----------------------------------------------------------------
 # TELEGRAM KOMUTLARI
 # ----------------------------------------------------------------
+@bot.message_handler(commands=["hisse"])
+def cmd_hisse(m):
+    parca = m.text.strip().split()
+    if len(parca) < 2:
+        bot.send_message(m.chat.id, "Lütfen bir hisse kodu girin. Örn: /hisse THYAO")
+        return
+    
+    ticker = parca[1].upper()
+    
+    def tek_hisse_islem():
+        try:
+            bot.send_message(m.chat.id, f"<b>{ticker}</b> için analiz hazırlanıyor, lütfen bekleyin...", parse_mode="HTML")
+        except:
+            pass
+        
+        vade, mod, baslik = su_anki_vade_ve_mod_belirle()
+        res = analiz_motoru(ticker, vade)
+        if not res:
+            bot.send_message(m.chat.id, f"<b>{ticker}</b> için yeterli veri bulunamadı veya hisse kodu hatalı.", parse_mode="HTML")
+            return
+            
+        piyasa = piyasa_baglamı_olustur()
+        ai_yanit = ai_sinyal_uret(res, mod, piyasa)
+        
+        al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, res["fiyat"])
+        if sat_f:
+            tahmin_kaydet(res["ticker"], al_f, sat_f, sl_f or res["sl"], kar_f, tip=f"TEK_{mod}")
+            
+        buf = grafik_olustur(res, "TEK HİSSE SORGUSU")
+        caption = caption_olustur(res, mod, ai_yanit)
+        
+        try:
+            bot.send_photo(m.chat.id, buf, caption=caption, parse_mode="HTML")
+        except Exception as e:
+            logger.error("Hisse gonderim hatasi: %s", e)
+            bot.send_message(m.chat.id, f"{ticker} grafiği gönderilemedi.")
+
+    threading.Thread(target=tek_hisse_islem, daemon=True).start()
+
 @bot.message_handler(commands=["gunluk"])
 def cmd_gunluk(m):
     vade, mod, baslik = su_anki_vade_ve_mod_belirle()
@@ -1037,6 +1076,7 @@ def cmd_start(m):
         "<b>Borsa Gözü | Kişisel Hisse Sinyal Botu</b>\n"
         "\n"
         "<b>HİSSE SİNYALLERİ</b>\n"
+        "/hisse [KOD] - Tek bir hisse için anlık detaylı analiz (Örn: /hisse THYAO)\n"
         "/gunluk - Bugün al-sat + Yarın sat sinyalleri\n"
         "/haftalik - Bu hafta içinde sat\n"
         "/ikihaftalik - 2 hafta içinde sat\n"
@@ -1076,6 +1116,7 @@ def home():
 # BASLAT
 # ----------------------------------------------------------------
 if __name__ == "__main__":
+    db_baslat()
     scheduler.start()
     threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))),
