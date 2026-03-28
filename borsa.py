@@ -272,12 +272,6 @@ def hisse_kazanma_orani(ticker):
         logger.error("Kazanma orani hatasi (%s): %s", ticker, e)
         return None
 
-        kazandi = sum(1 for r in rows if r[0] == "KAZANDI")
-        return kazandi / len(rows)
-    except Exception as e:
-        logger.error("Kazanma orani hatasi (%s): %s", ticker, e)
-        return None
-
 # ----------------------------------------------------------------
 # HABER & PIYASA BAGLAMLARI
 # ----------------------------------------------------------------
