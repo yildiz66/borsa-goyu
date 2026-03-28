@@ -1308,6 +1308,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error("Mavi menu komutlari ayarlanamadi: %s", e)
 
+
     scheduler.start()
     threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))),
@@ -1315,4 +1316,11 @@ if __name__ == "__main__":
     ).start()
     print("Borsa Gozu Bot basladi.")
     print("Otomatik: 09:50 bugün al-sat | 17:55 yarın sat + tahmin guncelle")
-    bot.infinity_polling()
+    # 409 Conflict hatasindan kacinmak icin webhook temizle ve bekle
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+    except Exception as e:
+        logger.warning("Webhook temizlenemedi: %s", e)
+    bot.infinity_polling(none_stop=True, timeout=20, long_polling_timeout=5)
+
