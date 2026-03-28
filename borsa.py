@@ -1089,13 +1089,13 @@ def ana_menu_olustur():
 # ----------------------------------------------------------------
 def _tek_hisse_islem(chat_id, ticker_input):
     """Tek hisse analizi - thread icinde calisir."""
+    import traceback
     try:
-        bot.send_message(chat_id, f"<b>{ticker_input}</b> için analiz hazırlanıyor, lütfen bekleyin...", parse_mode="HTML")
-
+        logger.info("Tek hisse analiz basladi: %s (chat_id=%s)", ticker_input, chat_id)
         vade, mod, baslik = su_anki_vade_ve_mod_belirle()
-        # Hafta sonu HAFTALIK modda VWAP filtresi calismiyor,
-        # filtrele_sirala yerine direkt analiz dondur
-        res = analiz_motoru(ticker_input, vade)
+        logger.info("Mod: %s, Vade: %s", mod, vade)
+
+        res = analiz_motoru(ticker_input, "1d")  # Her zaman gunluk veri kullan
         if not res:
             bot.send_message(chat_id,
                 f"<b>{ticker_input}</b> için yeterli veri bulunamadı veya hisse kodu hatalı.\n"
@@ -1113,12 +1113,14 @@ def _tek_hisse_islem(chat_id, ticker_input):
         buf     = grafik_olustur(res, "TEK HİSSE SORGUSU")
         caption = caption_olustur(res, mod, ai_yanit)
         bot.send_photo(chat_id, buf, caption=caption, parse_mode="HTML", reply_markup=ana_menu_olustur())
+        logger.info("Tek hisse analiz tamamlandi: %s", ticker_input)
 
     except Exception as e:
-        logger.error("Hisse islem hatasi (%s): %s", ticker_input, e)
+        tb = traceback.format_exc()
+        logger.error("Hisse islem hatasi (%s): %s\n%s", ticker_input, e, tb)
         try:
             bot.send_message(chat_id,
-                f"❌ <b>{ticker_input}</b> analizi sırasında bir hata oluştu.\nHata: {str(e)}",
+                f"❌ <b>{ticker_input}</b> analizi sırasında hata:\n<code>{str(e)[:200]}</code>",
                 parse_mode="HTML")
         except:
             pass
@@ -1133,6 +1135,7 @@ def cmd_hisse_slash(m):
             parse_mode="HTML", reply_markup=ana_menu_olustur())
         return
     ticker_input = parca[1].upper()
+    bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor...", parse_mode="HTML")
     threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
 
 @bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("hisse "))
@@ -1145,6 +1148,7 @@ def cmd_hisse_metin(m):
             parse_mode="HTML", reply_markup=ana_menu_olustur())
         return
     ticker_input = parca[1].upper()
+    bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor...", parse_mode="HTML")
     threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
 
 @bot.message_handler(commands=["gunluk"])
