@@ -1054,19 +1054,7 @@ def cmd_hisse_slash(m):
     bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor...", parse_mode="HTML")
     threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
 
-@bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("hisse "))
-def cmd_hisse_metin(m):
-    logger.info(f">>> [DEBUG] hisse metni alindi: {m.text}")
-    """Metin komutu: hisse THYAO"""
-    parca = m.text.strip().split()
-    if len(parca) < 2:
-        bot.send_message(m.chat.id,
-            "Lütfen bir hisse kodu girin.\nÖrn: <code>hisse THYAO</code>",
-            parse_mode="HTML", reply_markup=ana_menu_olustur())
-        return
-    ticker_input = parca[1].upper()
-    bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor...", parse_mode="HTML")
-    threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
+
 
 def _ai_sohbet_islem(chat_id, ticker, soru):
     import traceback
@@ -1124,19 +1112,7 @@ def cmd_sor(m):
     bot.send_message(m.chat.id, f"🤖 <b>{ticker_input}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
     threading.Thread(target=_ai_sohbet_islem, args=(m.chat.id, ticker_input, soru), daemon=True).start()
 
-@bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("sor "))
-def cmd_sor_metin(m):
-    logger.info(f">>> [DEBUG] sor metni alindi: {m.text}")
-    parca = m.text.strip().split(" ", 2)
-    if len(parca) < 3:
-        bot.send_message(m.chat.id,
-            "Lütfen bir hisse kodu ve sorunuzu girin.\nÖrn: <code>sor THYAO nasil durumlar?</code>",
-            parse_mode="HTML")
-        return
-    ticker_input = parca[1].upper()
-    soru = parca[2]
-    bot.send_message(m.chat.id, f"🤖 <b>{ticker_input}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
-    threading.Thread(target=_ai_sohbet_islem, args=(m.chat.id, ticker_input, soru), daemon=True).start()
+
 
 @bot.message_handler(commands=["gunluk"])
 @bot.message_handler(func=lambda m: m.text == "📅 Günlük")
@@ -1263,6 +1239,43 @@ def cmd_start(m):
         parse_mode="HTML",
         reply_markup=ana_menu_olustur()
     )
+
+@bot.message_handler(func=lambda m: True)
+def anla_ve_sor_catch_all(m):
+    """
+    Herhangi bir komutla eslesmeyen serbest metin mesajlarini yakalar.
+    Sartlar:
+    1) "sor THYAO nasil"
+    2) "THYAO nasil" -> Yapay zekaya sorar
+    3) "THYAO" -> Sadece hisse grafigini cizer (tek hisse analizi)
+    """
+    if not m.text: return
+    text = m.text.strip()
+    logger.info(f">>> [DEBUG] Catch-All serbest metin alindi: {text}")
+
+    if text.lower().startswith("sor ") or text.lower().startswith("sohbet "):
+        parca = text.split(" ", 2)
+        if len(parca) < 3:
+            bot.send_message(m.chat.id, "Lütfen bir hisse kodu ve sorunuzu girin.\nÖrn: <code>ASELS sence yükselir mi?</code>", parse_mode="HTML")
+            return
+        ticker = parca[1].upper()
+        soru = parca[2]
+    else:
+        # Serbest metin: "THYAO sence ucar mi?" veya "THYAO"
+        parca = text.split(" ", 1)
+        if len(parca) < 2:
+            # Sadece tek kelime yazilmis (örn: "THYAO"). Standart tek hisse sorgusu yapalim.
+            ticker = parca[0].upper()
+            bot.send_message(m.chat.id, f"<b>{ticker}</b> için analiz hazırlanıyor...", parse_mode="HTML")
+            threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker), daemon=True).start()
+            return
+        
+        # Kelimeden fazlasi yazilmis. (örn: "THYAO bilancosu nasil?")
+        ticker = parca[0].upper()
+        soru = parca[1]
+
+    bot.send_message(m.chat.id, f"🤖 <b>{ticker}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
+    threading.Thread(target=_ai_sohbet_islem, args=(m.chat.id, ticker, soru), daemon=True).start()
 
 # ----------------------------------------------------------------
 # FLASK HEALTH CHECK
