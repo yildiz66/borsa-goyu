@@ -41,72 +41,9 @@ client = Groq(api_key=GROQ_API_KEY)
 
 # ----------------------------------------------------------------
 # VERITABANI
-# Turso (TURSO_URL + TURSO_AUTH_TOKEN set ise) veya yerel SQLite
+# Sadece yerel SQLite
 # ----------------------------------------------------------------
-DB_YOLU         = os.environ.get("DB_YOLU", "tahminler.db")
-TURSO_URL       = os.environ.get("TURSO_URL", "")
-TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
-
-TURSO_AKTIF = bool(TURSO_URL and TURSO_AUTH_TOKEN)
-
-# ---- Turso HTTP yardimci ----------------------------------------
-def _turso_execute(sql, params=None):
-    """Turso HTTP Pipeline API'ye tek SQL sorgusu gonderir, fetchall benzeri liste dondurur."""
-    if params is None:
-        params = []
-    # Parametreleri Turso formatina cevir
-    args = []
-    for p in params:
-        if p is None:
-            args.append({"type": "null", "value": None})
-        elif isinstance(p, int):
-            args.append({"type": "integer", "value": str(p)})
-        elif isinstance(p, float):
-            args.append({"type": "float", "value": str(p)})
-        else:
-            args.append({"type": "text", "value": str(p)})
-
-    payload = {
-        "requests": [
-            {"type": "execute", "stmt": {"sql": sql, "args": args}},
-            {"type": "close"}
-        ]
-    }
-    headers = {
-        "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    api_url = TURSO_URL.replace("libsql://", "https://") + "/v2/pipeline"
-    try:
-        r = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        result = data["results"][0]
-        if result.get("type") == "error":
-            raise Exception(result["error"]["message"])
-        rows_raw = result.get("response", {}).get("result", {}).get("rows", [])
-        # Her satiri tuple'a cevir
-        rows = []
-        for row in rows_raw:
-            rows.append(tuple(
-                col.get("value") if col.get("type") != "null" else None
-                for col in row
-            ))
-        return rows
-    except Exception as e:
-        logger.error("Turso sorgu hatasi: %s | SQL: %s", e, sql[:80])
-        raise
-
-def _turso_scalar(sql, params=None):
-    """Turso'dan tek deger ceker (COUNT gibi)."""
-    rows = _turso_execute(sql, params)
-    if rows:
-        v = rows[0][0]
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return v
-    return 0
+DB_YOLU = os.environ.get("DB_YOLU", "tahminler.db")
 
 # -----------------------------------------------------------------
 def db_baslat():
@@ -127,15 +64,11 @@ def db_baslat():
             sonuc TEXT DEFAULT 'BEKLIYOR'
         )
     """
-    if TURSO_AKTIF:
-        _turso_execute(sql_create)
-        logger.info("Veritabani hazir: Turso (%s)", TURSO_URL)
-    else:
-        conn = sqlite3.connect(DB_YOLU)
-        conn.execute(sql_create)
-        conn.commit()
-        conn.close()
-        logger.info("Veritabani hazir: SQLite (%s)", DB_YOLU)
+    conn = sqlite3.connect(DB_YOLU)
+    conn.execute(sql_create)
+    conn.commit()
+    conn.close()
+    logger.info("Veritabani hazir: SQLite (%s)", DB_YOLU)
 
 def tahmin_kaydet(ticker, al_fiyat, hedef, sl, tahmin_yuzde, tip="SCALP"):
     tarih   = datetime.now(TZ_TR).strftime("%Y-%m-%d %H:%M")
@@ -147,13 +80,10 @@ def tahmin_kaydet(ticker, al_fiyat, hedef, sl, tahmin_yuzde, tip="SCALP"):
     """
     params = (anahtar, ticker, tarih, tip, al_fiyat, hedef, sl, tahmin_yuzde)
     try:
-        if TURSO_AKTIF:
-            _turso_execute(sql, list(params))
-        else:
-            conn = sqlite3.connect(DB_YOLU)
-            conn.execute(sql, params)
-            conn.commit()
-            conn.close()
+        conn = sqlite3.connect(DB_YOLU)
+        conn.execute(sql, params)
+        conn.commit()
+        conn.close()
     except Exception as e:
         logger.error("Tahmin kaydedilemedi: %s", e)
     return anahtar
@@ -163,12 +93,9 @@ def tahminleri_guncelle():
     guncellenenler = []
     try:
         sel_sql = "SELECT anahtar, ticker, al_fiyat, hedef, sl, tip, tahmin_yuzde FROM tahminler WHERE sonuc='BEKLIYOR'"
-        if TURSO_AKTIF:
-            bekleyenler = _turso_execute(sel_sql)
-        else:
-            conn = sqlite3.connect(DB_YOLU)
-            bekleyenler = conn.execute(sel_sql).fetchall()
-            conn.close()
+        conn = sqlite3.connect(DB_YOLU)
+        bekleyenler = conn.execute(sel_sql).fetchall()
+        conn.close()
     except Exception as e:
         logger.error("Tahmin guncelleme DB hatasi: %s", e)
         return guncellenenler
@@ -196,13 +123,10 @@ def tahminleri_guncelle():
             else:
                 sonuc = "BEKLIYOR"
             upd_params = (gercek, gercek_degisim, sonuc, anahtar)
-            if TURSO_AKTIF:
-                _turso_execute(upd_sql, list(upd_params))
-            else:
-                conn2 = sqlite3.connect(DB_YOLU)
-                conn2.execute(upd_sql, upd_params)
-                conn2.commit()
-                conn2.close()
+            conn2 = sqlite3.connect(DB_YOLU)
+            conn2.execute(upd_sql, upd_params)
+            conn2.commit()
+            conn2.close()
             guncellenenler.append({
                 "ticker": ticker, "tip": tip, "sonuc": sonuc,
                 "tahmin_yuzde": tahmin_yuzde or 0,
@@ -220,18 +144,12 @@ def tahmin_raporu_olustur():
         kaz_sql = "SELECT COUNT(*) FROM tahminler WHERE sonuc='KAZANDI'"
         kay_sql = "SELECT COUNT(*) FROM tahminler WHERE sonuc='KAYBETTI'"
         bkl_sql = "SELECT COUNT(*) FROM tahminler WHERE sonuc='BEKLIYOR'"
-        if TURSO_AKTIF:
-            rows       = _turso_execute(sel_sql)
-            kazandi_s  = _turso_scalar(kaz_sql)
-            kaybetti_s = _turso_scalar(kay_sql)
-            bekliyor_s = _turso_scalar(bkl_sql)
-        else:
-            conn = sqlite3.connect(DB_YOLU)
-            rows       = conn.execute(sel_sql).fetchall()
-            kazandi_s  = conn.execute(kaz_sql).fetchone()[0]
-            kaybetti_s = conn.execute(kay_sql).fetchone()[0]
-            bekliyor_s = conn.execute(bkl_sql).fetchone()[0]
-            conn.close()
+        conn = sqlite3.connect(DB_YOLU)
+        rows       = conn.execute(sel_sql).fetchall()
+        kazandi_s  = conn.execute(kaz_sql).fetchone()[0]
+        kaybetti_s = conn.execute(kay_sql).fetchone()[0]
+        bekliyor_s = conn.execute(bkl_sql).fetchone()[0]
+        conn.close()
     except Exception as e:
         logger.error("Tahmin raporu hatasi: %s", e)
         return "Rapor olusturulamadi."
@@ -258,12 +176,9 @@ def hisse_kazanma_orani(ticker):
     """Bir hissenin gecmis tahmin basari oranini dondurur (None = yeterli veri yok)."""
     try:
         sql = "SELECT sonuc FROM tahminler WHERE ticker=? AND sonuc IN ('KAZANDI','KAYBETTI')"
-        if TURSO_AKTIF:
-            rows = _turso_execute(sql, [ticker])
-        else:
-            conn = sqlite3.connect(DB_YOLU)
-            rows = conn.execute(sql, (ticker,)).fetchall()
-            conn.close()
+        conn = sqlite3.connect(DB_YOLU)
+        rows = conn.execute(sql, (ticker,)).fetchall()
+        conn.close()
         if not rows or len(rows) < 3:
             return None
         kazandi = sum(1 for r in rows if r[0] == "KAZANDI")
