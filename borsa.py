@@ -1100,7 +1100,8 @@ Lütfen yukarıdaki soruyu bu teknik verilere dayanarak (fakat kati yatırım ta
             model="llama-3.3-70b-versatile",
             temperature=0.5
         )
-        cevap = comp.choices[0].message.content.strip()
+        import html
+        cevap = html.escape(comp.choices[0].message.content.strip())
         bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
     except Exception as e:
         logger.error("AI sohbet hatasi: %s", e)
