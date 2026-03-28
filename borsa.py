@@ -1042,6 +1042,7 @@ def _tek_hisse_islem(chat_id, ticker_input):
 
 @bot.message_handler(commands=["hisse"])
 def cmd_hisse_slash(m):
+    logger.info(f">>> [DEBUG] /hisse komutu alindi: {m.text}")
     """Slash komutu: /hisse THYAO"""
     parca = m.text.strip().split()
     if len(parca) < 2:
@@ -1055,6 +1056,7 @@ def cmd_hisse_slash(m):
 
 @bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("hisse "))
 def cmd_hisse_metin(m):
+    logger.info(f">>> [DEBUG] hisse metni alindi: {m.text}")
     """Metin komutu: hisse THYAO"""
     parca = m.text.strip().split()
     if len(parca) < 2:
@@ -1109,6 +1111,7 @@ Lütfen yukarıdaki soruyu bu teknik verilere dayanarak (fakat kati yatırım ta
 
 @bot.message_handler(commands=["sor", "sohbet"])
 def cmd_sor(m):
+    logger.info(f">>> [DEBUG] /sor komutu alindi: {m.text}")
     parca = m.text.strip().split(" ", 2)
     if len(parca) < 3:
         bot.send_message(m.chat.id,
@@ -1122,6 +1125,7 @@ def cmd_sor(m):
 
 @bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("sor "))
 def cmd_sor_metin(m):
+    logger.info(f">>> [DEBUG] sor metni alindi: {m.text}")
     parca = m.text.strip().split(" ", 2)
     if len(parca) < 3:
         bot.send_message(m.chat.id,
@@ -1136,6 +1140,7 @@ def cmd_sor_metin(m):
 @bot.message_handler(commands=["gunluk"])
 @bot.message_handler(func=lambda m: m.text == "📅 Günlük")
 def cmd_gunluk(m):
+    logger.info(f">>> [DEBUG] /gunluk komutu alindi: {m.text}")
     vade, mod, baslik = su_anki_vade_ve_mod_belirle()
     threading.Thread(target=rapor_gonder, args=(KATILIM_TUMU, vade, mod, baslik), daemon=True).start()
 
