@@ -42,7 +42,7 @@ client = Groq(api_key=GROQ_API_KEY)
 # ----------------------------------------------------------------
 # VERITABANI (SQLite - kalici tahmin gecmisi)
 # ----------------------------------------------------------------
-DB_YOLU = "tahminler.db"
+DB_YOLU = os.environ.get("DB_YOLU", "tahminler.db")
 
 def db_baslat():
     conn = sqlite3.connect(DB_YOLU)
@@ -715,17 +715,24 @@ def maden_caption_olustur(res, vade_label, ai_yanit):
     )
 
 def su_anki_vade_ve_mod_belirle():
-    """Saat 17:00 sonrasi ise yarinki swing'i, oncesi ise bugunku scalp'i dondurur."""
+    """Saat ve gune gore vade/mod belirler.
+    Hafta sonu veya gece ise HAFTALIK modu dondurur (VWAP olmadan da calismasi icin).
+    """
     simdi = datetime.now(TZ_TR)
-    saat = simdi.hour
-    
-    # 17:00 ve sonrasi -> Kapanisa dogru yarin icin pozisyon al (Swing)
-    if (saat >= 17):
+    saat  = simdi.hour
+    gun   = simdi.weekday()  # 0=Pazartesi ... 6=Pazar
+
+    # Hafta sonu (Cumartesi=5, Pazar=6) -> HAFTALIK swing mod
+    if gun >= 5:
+        return "1wk", "HAFTALIK", "HAFTALIK (HAFTA SONU)"
+
+    # Is gunu: 17:00 ve sonrasi -> yarinki swing
+    if saat >= 17:
         return "1d", "GUNLUK_SWING", "YARIN SAT (OTOMATIK)"
-    # 10:00 - 17:00 arasi -> Bugun icinde Scalp
-    elif (saat >= 10):
+    # Is gunu: 10:00-17:00 -> bugunku scalp
+    elif saat >= 10:
         return "1d", "GUNLUK_SCALP", "BUGUN AL-SAT (OTOMATIK)"
-    # Sabah 10:00 oncesi -> Bugunku acilis icin Scalp/Swing
+    # Is gunu sabah oncesi -> acilis scalp
     else:
         return "1d", "GUNLUK_SCALP", "BUGUN ACILIS AL-SAT"
 
@@ -954,8 +961,20 @@ def otomatik_aksam():
 
     threading.Thread(target=aksam_is, daemon=True).start()
 
-scheduler.add_job(otomatik_sabah, "cron", hour=9,  minute=50)
-scheduler.add_job(otomatik_aksam, "cron", hour=17, minute=55)
+# Hafta ici (Pazartesi-Cuma) otomatik raporlar
+scheduler.add_job(otomatik_sabah, "cron", day_of_week="mon-fri", hour=9,  minute=50)
+scheduler.add_job(otomatik_aksam, "cron", day_of_week="mon-fri", hour=17, minute=55)
+
+# Pazar aksami haftalik sinyal raporu (20:00)
+def otomatik_pazar_aksam():
+    """Pazar 20:00 -- Haftaya ait haftalik swing sinyallerini gonder."""
+    threading.Thread(target=rapor_gonder,
+        args=(KATILIM_TUMU, "1wk", "HAFTALIK", "PAZAR AKSAM HAFTALIK SINYAL"),
+        kwargs={"otomatik": True},
+        daemon=True
+    ).start()
+
+scheduler.add_job(otomatik_pazar_aksam, "cron", day_of_week="sun", hour=20, minute=0)
 
 # ----------------------------------------------------------------
 # KLAVYE MENUSU
@@ -978,46 +997,65 @@ def ana_menu_olustur():
 # ----------------------------------------------------------------
 # TELEGRAM KOMUTLARI
 # ----------------------------------------------------------------
+def _tek_hisse_islem(chat_id, ticker_input):
+    """Tek hisse analizi - thread icinde calisir."""
+    try:
+        bot.send_message(chat_id, f"<b>{ticker_input}</b> için analiz hazırlanıyor, lütfen bekleyin...", parse_mode="HTML")
+
+        vade, mod, baslik = su_anki_vade_ve_mod_belirle()
+        # Hafta sonu HAFTALIK modda VWAP filtresi calismiyor,
+        # filtrele_sirala yerine direkt analiz dondur
+        res = analiz_motoru(ticker_input, vade)
+        if not res:
+            bot.send_message(chat_id,
+                f"<b>{ticker_input}</b> için yeterli veri bulunamadı veya hisse kodu hatalı.\n"
+                "(BIST hisselerini sadece kod olarak girin, örn: THYAO)",
+                parse_mode="HTML")
+            return
+
+        piyasa   = piyasa_baglamı_olustur()
+        ai_yanit = ai_sinyal_uret(res, mod, piyasa)
+
+        al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, res["fiyat"])
+        if sat_f:
+            tahmin_kaydet(res["ticker"], al_f, sat_f, sl_f or res["sl"], kar_f, tip=f"TEK_{mod}")
+
+        buf     = grafik_olustur(res, "TEK HİSSE SORGUSU")
+        caption = caption_olustur(res, mod, ai_yanit)
+        bot.send_photo(chat_id, buf, caption=caption, parse_mode="HTML", reply_markup=ana_menu_olustur())
+
+    except Exception as e:
+        logger.error("Hisse islem hatasi (%s): %s", ticker_input, e)
+        try:
+            bot.send_message(chat_id,
+                f"❌ <b>{ticker_input}</b> analizi sırasında bir hata oluştu.\nHata: {str(e)}",
+                parse_mode="HTML")
+        except:
+            pass
+
 @bot.message_handler(commands=["hisse"])
-@bot.message_handler(func=lambda m: m.text and m.text.lower().startswith("hisse"))
-def cmd_hisse(m):
+def cmd_hisse_slash(m):
+    """Slash komutu: /hisse THYAO"""
     parca = m.text.strip().split()
     if len(parca) < 2:
-        bot.send_message(m.chat.id, "Lütfen bir hisse kodu girin.\nÖrn: <code>/hisse THYAO</code> veya sadece <code>Hisse THYAO</code> yazabilirsiniz.", parse_mode="HTML", reply_markup=ana_menu_olustur())
+        bot.send_message(m.chat.id,
+            "Lütfen bir hisse kodu girin.\nÖrn: <code>/hisse THYAO</code>",
+            parse_mode="HTML", reply_markup=ana_menu_olustur())
         return
-    
     ticker_input = parca[1].upper()
-    
-    def tek_hisse_islem():
-        try:
-            bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor, lütfen bekleyin...", parse_mode="HTML")
-            
-            vade, mod, baslik = su_anki_vade_ve_mod_belirle()
-            res = analiz_motoru(ticker_input, vade)
-            if not res:
-                bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için yeterli veri bulunamadı veya hisse kodu hatalı.\n(BIST hisselerini sadece kod olarak girin, örn: THYAO)", parse_mode="HTML")
-                return
-                
-            piyasa = piyasa_baglamı_olustur()
-            ai_yanit = ai_sinyal_uret(res, mod, piyasa)
-            
-            al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, res["fiyat"])
-            if sat_f:
-                tahmin_kaydet(res["ticker"], al_f, sat_f, sl_f or res["sl"], kar_f, tip=f"TEK_{mod}")
-                
-            buf = grafik_olustur(res, "TEK HİSSE SORGUSU")
-            caption = caption_olustur(res, mod, ai_yanit)
-            
-            bot.send_photo(m.chat.id, buf, caption=caption, parse_mode="HTML", reply_markup=ana_menu_olustur())
-            
-        except Exception as e:
-            logger.error(f"Hisse islem hatasi ({ticker_input}): {e}")
-            try:
-                bot.send_message(m.chat.id, f"❌ <b>{ticker_input}</b> analizi sırasında bir hata oluştu.\nHata: {str(e)}", parse_mode="HTML")
-            except:
-                pass
+    threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
 
-    threading.Thread(target=tek_hisse_islem, daemon=True).start()
+@bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("hisse "))
+def cmd_hisse_metin(m):
+    """Metin komutu: hisse THYAO"""
+    parca = m.text.strip().split()
+    if len(parca) < 2:
+        bot.send_message(m.chat.id,
+            "Lütfen bir hisse kodu girin.\nÖrn: <code>hisse THYAO</code>",
+            parse_mode="HTML", reply_markup=ana_menu_olustur())
+        return
+    ticker_input = parca[1].upper()
+    threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
 
 @bot.message_handler(commands=["gunluk"])
 @bot.message_handler(func=lambda m: m.text == "📅 Günlük")
