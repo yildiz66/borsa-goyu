@@ -1066,6 +1066,73 @@ def cmd_hisse_metin(m):
     bot.send_message(m.chat.id, f"<b>{ticker_input}</b> için analiz hazırlanıyor...", parse_mode="HTML")
     threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker_input), daemon=True).start()
 
+def _ai_sohbet_islem(chat_id, ticker, soru):
+    import traceback
+    try:
+        res = analiz_motoru(ticker, "1d")
+        if not res:
+            bot.send_message(chat_id, f"❌ <b>{ticker}</b> kodlu hisse bulunamadı veya verisi çekilemedi.", parse_mode="HTML")
+            return
+        
+        piyasa = piyasa_baglamı_olustur()
+        
+        talimat = f"""Sen Borsa İstanbul uzmanı, yapay zeka tabanlı bir yatırım asistanısın. 
+Kullanıcı sana {ticker} hissesi hakkında özel bir soru soruyor: "{soru}"
+
+Aşağıda hissenin güncel teknik verileri ve genel piyasa durumu var. Bu verilerden faydalanarak kullanıcının sorusuna doğrudan, açık, anlaşılır ve Türkçe olarak yanıt ver. 
+
+=== {ticker} TEKNİK VERİLER ===
+Fiyat: {round(res['fiyat'], 2)} TL
+RSI: {round(res['rsi'], 1)} (Aşırı alım/satım göstergesi)
+Trend: {res['trend']}
+MACD: {res['macd']}
+Hacim Durumu: {res['hacim']}
+
+=== PİYASA DURUMU ===
+{piyasa}
+
+Lütfen yukarıdaki soruyu bu teknik verilere dayanarak (fakat kati yatırım tavsiyesi olmadığını belirterek) mantıklı bir şekilde cevapla. Gerekirse genel temel analiz (haber, beklenti vb.) bilgilerinden de yararlanabilirsin."""
+
+        comp = client.chat.completions.create(
+            messages=[{"role": "user", "content": talimat}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.5
+        )
+        cevap = comp.choices[0].message.content.strip()
+        bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
+    except Exception as e:
+        logger.error("AI sohbet hatasi: %s", e)
+        try:
+            bot.send_message(chat_id, "Yapay zekaya danışırken bir hata oluştu.")
+        except:
+            pass
+
+@bot.message_handler(commands=["sor", "sohbet"])
+def cmd_sor(m):
+    parca = m.text.strip().split(" ", 2)
+    if len(parca) < 3:
+        bot.send_message(m.chat.id,
+            "Lütfen bir hisse kodu ve sorunuzu girin.\nÖrn: <code>/sor THYAO bu hissede bedelsiz potansiyeli var mı?</code>",
+            parse_mode="HTML")
+        return
+    ticker_input = parca[1].upper()
+    soru = parca[2]
+    bot.send_message(m.chat.id, f"🤖 <b>{ticker_input}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
+    threading.Thread(target=_ai_sohbet_islem, args=(m.chat.id, ticker_input, soru), daemon=True).start()
+
+@bot.message_handler(func=lambda m: m.text and m.text.strip().lower().startswith("sor "))
+def cmd_sor_metin(m):
+    parca = m.text.strip().split(" ", 2)
+    if len(parca) < 3:
+        bot.send_message(m.chat.id,
+            "Lütfen bir hisse kodu ve sorunuzu girin.\nÖrn: <code>sor THYAO nasil durumlar?</code>",
+            parse_mode="HTML")
+        return
+    ticker_input = parca[1].upper()
+    soru = parca[2]
+    bot.send_message(m.chat.id, f"🤖 <b>{ticker_input}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
+    threading.Thread(target=_ai_sohbet_islem, args=(m.chat.id, ticker_input, soru), daemon=True).start()
+
 @bot.message_handler(commands=["gunluk"])
 @bot.message_handler(func=lambda m: m.text == "📅 Günlük")
 def cmd_gunluk(m):
@@ -1159,8 +1226,9 @@ def cmd_start(m):
     bot.send_message(m.chat.id,
         "<b>Borsa Gözü | Kişisel Hisse Sinyal Botu</b>\n"
         "\n"
-        "<b>HİSSE SİNYALLERİ</b>\n"
+        "<b>HİSSE SİNYALLERİ & SOHBET</b>\n"
         "/hisse [KOD] - Tek bir hisse için anlık detaylı analiz (Örn: /hisse THYAO)\n"
+        "/sor [KOD] [SORU] - Seçtiğiniz hisse hakkında yapay zekaya sorular sorun (Örn: /sor ASELS sence yükselir mi?)\n"
         "/gunluk - Bugün al-sat + Yarın sat sinyalleri\n"
         "/haftalik - Bu hafta içinde sat\n"
         "/ikihaftalik - 2 hafta içinde sat\n"
@@ -1208,6 +1276,7 @@ if __name__ == "__main__":
         bot.set_my_commands([
             BotCommand("start", "Ana menü ve yardım"),
             BotCommand("hisse", "Tek hisse analizi (Örn: /hisse THYAO)"),
+            BotCommand("sor", "Hisseyle ilgili yapay zekayla sohbet (Örn: /sor KOD SORU)"),
             BotCommand("gunluk", "Bugün al-sat + Yarın sat"),
             BotCommand("haftalik", "Bu hafta içinde sat"),
             BotCommand("ikihaftalik", "2 hafta içinde sat"),
