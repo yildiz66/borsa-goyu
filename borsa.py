@@ -241,25 +241,26 @@ def piyasa_baglamı_olustur(hisse_ticker=""):
         for isim, v in makro.items():
             satirlar.append(f"{isim}: {v['fiyat']}  ({'+' if v['degisim']>=0 else ''}{v['degisim']}%)")
 
-    tr_haberler = haber_cek("Turkiye ekonomi borsa piyasa", dil="tr", adet=5)
-    if tr_haberler:
-        satirlar.append("\n=== TURKIYE HABERLERI ===")
-        satirlar.extend([f"- {h}" for h in tr_haberler])
+    if hisse_ticker:
+        ozel_haberler = haber_cek(f"{hisse_ticker} hisse Borsa", dil="tr", adet=5)
+        if ozel_haberler:
+            satirlar.append(f"\n=== {hisse_ticker} SON HABERLER ===")
+            satirlar.extend([f"- {h}" for h in ozel_haberler])
+            
+        sosyal = haber_cek(f"{hisse_ticker} borsa yorum", dil="tr", adet=3)
+        if sosyal:
+            satirlar.append(f"\n=== {hisse_ticker} SOSYAL TARTISMALAR ===")
+            satirlar.extend([f"- {h}" for h in sosyal])
+    else:
+        tr_haberler = haber_cek("Turkiye ekonomi borsa piyasa", dil="tr", adet=5)
+        if tr_haberler:
+            satirlar.append("\n=== TURKIYE HABERLERI ===")
+            satirlar.extend([f"- {h}" for h in tr_haberler])
 
-    global_haberler = haber_cek("stock market economy Fed interest rate inflation", dil="en", adet=4)
-    if global_haberler:
-        satirlar.append("\n=== GLOBAL HABERLER ===")
-        satirlar.extend([f"- {h}" for h in global_haberler])
-
-    bist_haberler = haber_cek("BIST Borsa Istanbul hisse", dil="tr", adet=4)
-    if bist_haberler:
-        satirlar.append("\n=== BIST HABERLERI ===")
-        satirlar.extend([f"- {h}" for h in bist_haberler])
-
-    sosyal = haber_cek(f"borsa hisse {hisse_ticker} Twitter trend", dil="tr", adet=3)
-    if sosyal:
-        satirlar.append("\n=== SOSYAL MEDYA TREND ===")
-        satirlar.extend([f"- {h}" for h in sosyal])
+        global_haberler = haber_cek("stock market economy", dil="en", adet=3)
+        if global_haberler:
+            satirlar.append("\n=== GLOBAL HABERLER ===")
+            satirlar.extend([f"- {h}" for h in global_haberler])
 
     return "\n".join(satirlar) if satirlar else ""
 
@@ -1065,23 +1066,25 @@ def _ai_sohbet_islem(chat_id, ticker, soru):
             bot.send_message(chat_id, f"❌ <b>{ticker}</b> kodlu hisse bulunamadı veya verisi çekilemedi.", parse_mode="HTML")
             return
         
-        piyasa = piyasa_baglamı_olustur()
-        talimat = f"""Sen Borsa İstanbul uzmanı, yapay zeka tabanlı bir yatırım asistanısın. 
-Aşağıda kullanıcının ilgilendiği {ticker} hissesinin güncel teknik verileri ve piyasa durumu var.
+        piyasa = piyasa_baglamı_olustur(ticker)
+        talimat = f"""Sen dünyaca ünlü, kurumsal ve son derece zeki bir finansal danışmansın (Warren Buffett, Peter Lynch veya Ray Dalio ekolünden). Kesinlikle laf kalabalığı yapmazsın. Verileri soğukkanlılık, matematik ve temel akılla analiz edersin. Riskleri net bir şekilde söyler, potansiyelleri ise coşkuya kapılmadan profesyonelce vurgularsın.
 
-=== {ticker} TEKNİK VERİLER ===
+Kullanıcının senden analizini ve fikrini istediği hisse: {ticker}
+
+=== {ticker} CANLI TEKNİK & MATEMATİKSEL VERİLERİ ===
 Fiyat: {round(res['fiyat'], 2)} TL
-RSI: {round(res['rsi'], 1)} (Aşırı alım/satım)
-Trend: {res['trend']}
-MACD: {res['macd']}
-Hacim Durumu: {res['hacim']}
-Bollinger: Alt {round(res['l_b'],2)}, Orta {round(res['mid_b'],2)}, Üst {round(res['u_b'],2)}
+RSI (Göreceli Güç): {round(res['rsi'], 1)} (Kural: 30 altı ucuz/aşırı satım, 70 üstü pahalı/aşırı alım)
+Trend Yönü: {res['trend']} (Kısa-Orta vade hareketli ortalamalara göre)
+MACD Durumu: {res['macd']} (Momentum ve kırılım göstergesi)
+Hacim Durumu: {res['hacim']} (İlgi ve para girişi/çıkışı gücü)
+Bollinger Bantları: Alt Destek={round(res['l_b'],2)}, Orta Maliyet={round(res['mid_b'],2)}, Üst Direnç={round(res['u_b'],2)}
 
-=== PİYASA DURUMU ===
+=== PİYASA BAĞLAMI & GÜNCEL HABER / SOSYAL MEDYA ===
 {piyasa}
 
-Lütfen soruya bu verilere dayanarak (fakat yatırım tavsiyesi olmadığını belirterek) cevap ver.
-Kullanıcı Sorusu: "{soru}"
+GÖREVİN:
+Lütfen kullanıcının şu sorusuna ("{soru}") çok net, keskin, ufuk açıcı ve profesyonel bir yanıt ver. Karar vermesine yardımcı ol, artıları ve eksileri terazinin iki tarafına koy. Karşıdaki kişi rasyonel bir yatırımcı; ona rasyonel, haberlerle desteklenmiş ve teknik göstergelerle yoğrulmuş bir öngörü sun.
+(Yanıtının sonuna Yasal Uyarı olarak bunun bir yatırım tavsiyesi olmadığını 1 cümleyle ekle.)
 """
         
         USER_CONTEXTS[chat_id] = {
