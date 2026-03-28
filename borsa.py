@@ -38,6 +38,7 @@ GNEWS_KEY    = os.environ.get("GNEWS_API_KEY", "")  # gnews.io - ucretsiz (100 r
 
 bot    = telebot.TeleBot(TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
+USER_CONTEXTS = {}
 
 # ----------------------------------------------------------------
 # VERITABANI
@@ -1057,7 +1058,7 @@ def cmd_hisse_slash(m):
 
 
 def _ai_sohbet_islem(chat_id, ticker, soru):
-    import traceback
+    import html
     try:
         res = analiz_motoru(ticker, "1d")
         if not res:
@@ -1065,34 +1066,69 @@ def _ai_sohbet_islem(chat_id, ticker, soru):
             return
         
         piyasa = piyasa_baglamı_olustur()
-        
         talimat = f"""Sen Borsa İstanbul uzmanı, yapay zeka tabanlı bir yatırım asistanısın. 
-Kullanıcı sana {ticker} hissesi hakkında özel bir soru soruyor: "{soru}"
-
-Aşağıda hissenin güncel teknik verileri ve genel piyasa durumu var. Bu verilerden faydalanarak kullanıcının sorusuna doğrudan, açık, anlaşılır ve Türkçe olarak yanıt ver. 
+Aşağıda kullanıcının ilgilendiği {ticker} hissesinin güncel teknik verileri ve piyasa durumu var.
 
 === {ticker} TEKNİK VERİLER ===
 Fiyat: {round(res['fiyat'], 2)} TL
-RSI: {round(res['rsi'], 1)} (Aşırı alım/satım göstergesi)
+RSI: {round(res['rsi'], 1)} (Aşırı alım/satım)
 Trend: {res['trend']}
 MACD: {res['macd']}
 Hacim Durumu: {res['hacim']}
+Bollinger: Alt {round(res['l_b'],2)}, Orta {round(res['mid_b'],2)}, Üst {round(res['u_b'],2)}
 
 === PİYASA DURUMU ===
 {piyasa}
 
-Lütfen yukarıdaki soruyu bu teknik verilere dayanarak (fakat kati yatırım tavsiyesi olmadığını belirterek) mantıklı bir şekilde cevapla. Gerekirse genel temel analiz (haber, beklenti vb.) bilgilerinden de yararlanabilirsin."""
-
+Lütfen soruya bu verilere dayanarak (fakat yatırım tavsiyesi olmadığını belirterek) cevap ver.
+Kullanıcı Sorusu: "{soru}"
+"""
+        
+        USER_CONTEXTS[chat_id] = {
+            "ticker": ticker,
+            "history": [{"role": "system", "content": talimat}]
+        }
+        
         comp = client.chat.completions.create(
-            messages=[{"role": "user", "content": talimat}],
+            messages=USER_CONTEXTS[chat_id]["history"],
             model="llama-3.3-70b-versatile",
             temperature=0.5
         )
-        import html
-        cevap = html.escape(comp.choices[0].message.content.strip())
+        cevap_ham = comp.choices[0].message.content.strip()
+        USER_CONTEXTS[chat_id]["history"].append({"role": "assistant", "content": cevap_ham})
+        
+        cevap = html.escape(cevap_ham)
         bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
     except Exception as e:
         logger.error("AI sohbet hatasi: %s", e)
+        try:
+            bot.send_message(chat_id, "Yapay zekaya danışırken bir hata oluştu.")
+        except:
+            pass
+
+def _ai_sohbet_devam(chat_id, metin):
+    import html
+    try:
+        USER_CONTEXTS[chat_id]["history"].append({"role": "user", "content": metin})
+        messages = USER_CONTEXTS[chat_id]["history"]
+        
+        # Son 7 mesaji tut (1 system + 6 chat) hafiza sismemesi icin
+        if len(messages) > 7:
+            messages = [messages[0]] + messages[-6:]
+            
+        comp = client.chat.completions.create(
+            messages=messages,
+            model="llama-3.3-70b-versatile",
+            temperature=0.5
+        )
+        cevap_ham = comp.choices[0].message.content.strip()
+        USER_CONTEXTS[chat_id]["history"].append({"role": "assistant", "content": cevap_ham})
+        
+        cevap = html.escape(cevap_ham)
+        ticker = USER_CONTEXTS[chat_id]["ticker"]
+        bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
+    except Exception as e:
+        logger.error("AI sohbet devam hatasi: %s", e)
         try:
             bot.send_message(chat_id, "Yapay zekaya danışırken bir hata oluştu.")
         except:
@@ -1240,42 +1276,59 @@ def cmd_start(m):
         reply_markup=ana_menu_olustur()
     )
 
+def _genel_metin_islem(chat_id, text):
+    parca = text.split(" ", 1)
+    ilk_kelime = parca[0].upper()
+    
+    # Once hisse kodu olup olmadigini hizlica analiz motoruna sorarak test et
+    res = analiz_motoru(ilk_kelime, "1d")
+    
+    if res:
+        # BU BIR HISSE ISTEGI!
+        if len(parca) == 1:
+            # Sadece tek kelime: "THYAO" -> Standart Analiz
+            vade, mod, baslik = su_anki_vade_ve_mod_belirle()
+            piyasa = piyasa_baglamı_olustur()
+            ai_yanit = ai_sinyal_uret(res, mod, piyasa)
+            al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, res["fiyat"])
+            if sat_f:
+                tahmin_kaydet(res["ticker"], al_f, sat_f, sl_f or res["sl"], kar_f, tip=f"TEK_{mod}")
+            buf = grafik_olustur(res, "TEK HİSSE SORGUSU")
+            caption = caption_olustur(res, mod, ai_yanit)
+            bot.send_photo(chat_id, buf, caption=caption, parse_mode="HTML", reply_markup=ana_menu_olustur())
+        else:
+            # Hisse + Soru: "THYAO sence nasil" -> Yeni Sohbet Baslangici
+            soru = parca[1]
+            _ai_sohbet_islem(chat_id, ilk_kelime, soru)
+    else:
+        # HISSE BULUNAMADI! O zaman sohbetin devami midir?
+        if chat_id in USER_CONTEXTS:
+            # Devam eden sohbet var, yapay zekaya yolla
+            bot.send_message(chat_id, f"🤖 Yapay zeka düşünüyor...", parse_mode="HTML")
+            _ai_sohbet_devam(chat_id, text)
+        else:
+            bot.send_message(chat_id, f"❌ <b>{ilk_kelime}</b> kodlu hisse bulunamadı. Sohbet etmek için önce geçerli bir hisse kodu yazın (Örn: THYAO nasıl?)", parse_mode="HTML")
+
+
 @bot.message_handler(func=lambda m: True)
 def anla_ve_sor_catch_all(m):
-    """
-    Herhangi bir komutla eslesmeyen serbest metin mesajlarini yakalar.
-    Sartlar:
-    1) "sor THYAO nasil"
-    2) "THYAO nasil" -> Yapay zekaya sorar
-    3) "THYAO" -> Sadece hisse grafigini cizer (tek hisse analizi)
-    """
     if not m.text: return
     text = m.text.strip()
+    chat_id = m.chat.id
     logger.info(f">>> [DEBUG] Catch-All serbest metin alindi: {text}")
 
     if text.lower().startswith("sor ") or text.lower().startswith("sohbet "):
         parca = text.split(" ", 2)
         if len(parca) < 3:
-            bot.send_message(m.chat.id, "Lütfen bir hisse kodu ve sorunuzu girin.\nÖrn: <code>ASELS sence yükselir mi?</code>", parse_mode="HTML")
+            bot.send_message(chat_id, "Lütfen bir hisse kodu ve sorunuzu girin.\nÖrn: <code>sor ASELS sence yükselir mi?</code>", parse_mode="HTML")
             return
         ticker = parca[1].upper()
         soru = parca[2]
+        bot.send_message(chat_id, f"🤖 <b>{ticker}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
+        threading.Thread(target=_ai_sohbet_islem, args=(chat_id, ticker, soru), daemon=True).start()
     else:
-        # Serbest metin: "THYAO sence ucar mi?" veya "THYAO"
-        parca = text.split(" ", 1)
-        if len(parca) < 2:
-            # Sadece tek kelime yazilmis (örn: "THYAO"). Standart tek hisse sorgusu yapalim.
-            ticker = parca[0].upper()
-            bot.send_message(m.chat.id, f"<b>{ticker}</b> için analiz hazırlanıyor...", parse_mode="HTML")
-            threading.Thread(target=_tek_hisse_islem, args=(m.chat.id, ticker), daemon=True).start()
-            return
-        
-        # Kelimeden fazlasi yazilmis. (örn: "THYAO bilancosu nasil?")
-        ticker = parca[0].upper()
-        soru = parca[1]
-
-    bot.send_message(m.chat.id, f"🤖 <b>{ticker}</b> için yapay zekaya danışılıyor... Lütfen bekleyin.", parse_mode="HTML")
-    threading.Thread(target=_ai_sohbet_islem, args=(m.chat.id, ticker, soru), daemon=True).start()
+        # Duz metin, hizli ve genel isleme gonder
+        threading.Thread(target=_genel_metin_islem, args=(chat_id, text), daemon=True).start()
 
 # ----------------------------------------------------------------
 # FLASK HEALTH CHECK
