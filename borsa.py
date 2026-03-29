@@ -436,6 +436,29 @@ def analiz_motoru(hisse, vade="1d"):
         ema21 = float(last["EMA21"])
         ema50 = float(last["EMA50"])
         s200  = float(last["SMA200"])
+
+        # MFI (Money Flow Index) -- Para Akışı Giriş-Çıkış
+        df["MFI"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
+        
+        # ADX (Average Directional Index) -- Trendin Gücü (0-100)
+        # 25 üstü güçlü bir trend olduğunu gösterir.
+        adx_df = ta.adx(df["High"], df["Low"], df["Close"], length=14)
+        df["ADX"] = adx_df["ADX_14"]
+        
+        # Göreceli Güç (Relative Strength vs BIST100)
+        # BIST100 verisi çek ve kıyasla
+        bist = yf.download("XU100.IS", period="2d", interval="1d", progress=False, timeout=5)
+        if bist is not None and not bist.empty:
+            if isinstance(bist.columns, pd.MultiIndex): bist.columns = bist.columns.get_level_values(0)
+            bist_ret = ((float(bist.iloc[-1]["Close"]) - float(bist.iloc[-2]["Close"])) / float(bist.iloc[-2]["Close"])) * 100
+            stock_ret = ((c_p - float(prev["Close"])) / float(prev["Close"])) * 100
+            rs = round(stock_ret - bist_ret, 2) # Endeksten ne kadar daha iyi/kotü (+ ise endeksi yenmiş)
+        else:
+            rs = 0
+
+        last_idx = df.iloc[-1]
+        mfi_v = float(last_idx["MFI"]) if not pd.isna(last_idx["MFI"]) else 50
+        adx_v = float(last_idx["ADX"]) if not pd.isna(last_idx["ADX"]) else 0
         
         # Trend Gucu: Fiyat SMA200 ustunde ve EMA9 > EMA21 ise GUCLU
         trend = "GUCLU YUXARI" if (c_p > s200 and ema9 > ema21 and c_p > vwap) else \
@@ -450,9 +473,14 @@ def analiz_motoru(hisse, vade="1d"):
         pot     = ((u_b - c_p) / c_p) * 100
         success = round((df[df["Close"] > df["SMA200"]].pct_change()["Close"] > 0).mean() * 100, 1)
         sl, tp, rr = hesapla_sl_tp(df, c_p)
+        
+        # Süper Sinyal Kontrolü
+        # Para Girişi Güçlü (MFI > 60), Trend Başlamış (ADX > 25) ve Endeksten Güçlü (RS > 0)
+        super_signal = (mfi_v > 60 and adx_v > 25 and rs > 0)
 
         return {
             "ticker": hisse, "fiyat": c_p, "rsi": float(last["RSI"]),
+            "mfi": mfi_v, "adx": adx_v, "rs": rs, "super": super_signal,
             "pot": pot, "u_b": u_b, "l_b": l_b, "mid_b": mid_b, "vwap": vwap,
             "s200": s200, "ema9": ema9, "ema21": ema21, "ema50": ema50,
             "hacim": hacim_durum, "hacim_oran": round(hacim_oran, 2),
@@ -547,6 +575,10 @@ Asagidaki TEKNIK VERI ve PIYASA BAGLAMINI birlikte degerlendirerek net emir ver.
 === TEKNIK VERI ===
 Hisse: {res['ticker']}, Fiyat: {round(res['fiyat'],2)} TL
 RSI: {round(res['rsi'],1)}, Trend: {res['trend']}, MACD: {res['macd']}
+MFI (Para Akışı): {round(res['mfi'],1)} (60+ Pozitif Para Girişi)
+ADX (Trend Gücü): {round(res['adx'],1)} (25+ Güçlü Trend)
+RS (Endekse Göre): {res['rs']:+.2f} (Pozitifse Endeksten Daha Güçlü)
+Süper Sinyal: {'VAR' if res['super'] else 'YOK'}
 EMA9: {round(res['ema9'],2)}, EMA21: {round(res['ema21'],2)}, SMA200: {round(res['s200'],2)}
 Bollinger Alt: {round(res['l_b'],2)}, Orta: {round(res['mid_b'],2)}, Ust: {round(res['u_b'],2)} TL
 Hacim: {res['hacim']} ({res['hacim_oran']}x ortalama)
@@ -727,15 +759,17 @@ def caption_olustur(t, mod, ai_yanit):
     }
     label, tip_kisa, tarih_str = etiketler.get(mod, (mod, mod, ""))
     
-    # En iyi hisse ise yildiz ekle
-    yildiz = "⭐ <b>GÜNÜN EN İYİ ADAYI</b> ⭐\n" if t.get("en_iyi") else ""
+    # Süper sinyal varsa yıldız ekle
+    yildiz = "💎 <b>SÜPER ALTIN SİNYAL</b> 💎\n" if t.get("super") else \
+             "⭐ <b>GÜNÜN EN İYİ ADAYI</b> ⭐\n" if t.get("en_iyi") else ""
 
     return (
         f"{yildiz}"
         f"<b>#{t['ticker']} | {label}</b>\n"
         f"{tarih_str}\n"
         f"Fiyat: {round(t['fiyat'],2)} TL  |  Yön: {t['trend']}\n"
-        f"RSI: {round(t['rsi'],1)}  |  MACD: {t['macd']}\n"
+        f"RSI: {round(t['rsi'],1)}  |  Para Akışı (MFI): {round(t['mfi'],1)}\n"
+        f"Trend Gücü (ADX): {round(t['adx'],1)}  |  BIST Kıyas: {t['rs']:+.1f}\n"
         f"Hacim: {t['hacim']} ({t['hacim_oran']}x)\n"
         f"Hedef Fiyat (BB): {round(t['u_b'],2)} TL (%{round(t['pot'],1)})\n"
         f"Zarar Kes: {t['sl']} TL  |  Kâr Al: {t['tp']} TL  |  Risk/Kazanç: 1:{t['rr']}\n"
@@ -814,13 +848,14 @@ def filtrele_sirala(havuz, mod):
             if res["fiyat"] > res["s200"] and res["rsi"] < 72:
                 sonuc.append(res)
 
-    # Potansiyele (Bollinger Ust Bandina uzaklik) gore sirala
-    sirali = sorted(sonuc, key=lambda x: x["pot"], reverse=True)[:3]
+    # Potansiyele (Bollinger Ust Bandina uzaklik) ve Goreceli Guce gore sirala
+    sirali = sorted(sonuc, key=lambda x: (x["super"], x["rs"], x["pot"]), reverse=True)[:3]
     
     # En iyi 1 tanesini isaretle
     if sirali:
         for i, s in enumerate(sirali):
-            sirali[i]["en_iyi"] = (i == 0) # Ilk siradaki en iyisi
+            # Süper sinyal varsa direkt en iyisi odur
+            sirali[i]["en_iyi"] = (i == 0) # İlk sıradaki en iyisi
             
     return sirali
 
