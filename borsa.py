@@ -354,14 +354,14 @@ GLOBAL_MADENLER = {
 # ----------------------------------------------------------------
 # YARDIMCI: ATR tabanli SL/TP
 # ----------------------------------------------------------------
-def hesapla_sl_tp(df, fiyat, atr_carpan=1.5):
+def hesapla_sl_tp(df, fiyat, sl_carpan=1.5, tp_carpan=3.5):
     try:
         atr     = ta.atr(df["High"], df["Low"], df["Close"], length=14)
         if atr is None or atr.empty:
             return None, None, None
         atr_val = float(atr.iloc[-1])
-        sl      = round(fiyat - atr_carpan * atr_val, 2)
-        tp      = round(fiyat + atr_carpan * atr_val, 2)
+        sl      = round(fiyat - sl_carpan * atr_val, 2)
+        tp      = round(fiyat + tp_carpan * atr_val, 2)
         rr      = round((tp - fiyat) / (fiyat - sl), 2) if (fiyat - sl) != 0 else 0
         return sl, tp, rr
     except:
@@ -466,7 +466,10 @@ def analiz_motoru(hisse, vade="1d", bist_ret=0):
 
         pot     = ((u_b - c_p) / c_p) * 100
         success = round((df[df["Close"] > df["SMA200"]].pct_change()["Close"] > 0).mean() * 100, 1)
-        sl, tp, rr = hesapla_sl_tp(df, c_p)
+        
+        # Agresif Marj: SL guvenli (1.5x), TP hırslı (3.5x - 4.5x)
+        # Amac gunlukte %6-10 arasi marj saglayacak seviyeyi bulmak
+        sl, tp, rr = hesapla_sl_tp(df, c_p, sl_carpan=1.5, tp_carpan=4.0)
         
         # Süper Sinyal Kontrolü
         super_signal = (mfi_v > 60 and adx_v > 25 and rs > 0)
@@ -562,10 +565,13 @@ def ai_sinyal_uret(res, mod="GUNLUK", piyasa_metni=""):
         else:
             tip_aciklamasi = "Aylik uzun vade pozisyon."
 
-        talimat = f"""Sen profesyonel bir BIST analisti ve yapay zeka destekli yatirim danismanisin.
-Asagidaki TEKNIK VERI ve PIYASA BAGLAMINI birlikte degerlendirerek net emir ver.
+        talimat = f"""Sen profesyonel bir BIST analisti ve yapay zeka destekli yatırım danışmanısın.
+Asağıdaki TEKNİK VERİ ve PİYASA BAĞLAMINI birlikte değerlendirerek net emir ver.
 
-=== TEKNIK VERI ===
+=== HEDEF STRATEJİ ===
+Kullanıcı yüksek marj bekliyor (%6 - %10 arasi). Tavan olma potansiyeli olan veya en az %6-7 reel kazanç vaat eden seviyeleri belirle. Muhafazakar değil, teknik onayı olan agresif hedefler ver.
+
+=== TEKNİK VERİ ===
 Hisse: {res['ticker']}, Fiyat: {round(res['fiyat'],2)} TL
 RSI: {round(res['rsi'],1)}, Trend: {res['trend']}, MACD: {res['macd']}
 MFI (Para Akışı): {round(res['mfi'],1)} (60+ Pozitif Para Girişi)
@@ -573,22 +579,22 @@ ADX (Trend Gücü): {round(res['adx'],1)} (25+ Güçlü Trend)
 RS (Endekse Göre): {res['rs']:+.2f} (Pozitifse Endeksten Daha Güçlü)
 Süper Sinyal: {'VAR' if res['super'] else 'YOK'}
 EMA9: {round(res['ema9'],2)}, EMA21: {round(res['ema21'],2)}, SMA200: {round(res['s200'],2)}
-Bollinger Alt: {round(res['l_b'],2)}, Orta: {round(res['mid_b'],2)}, Ust: {round(res['u_b'],2)} TL
+Bollinger Alt: {round(res['l_b'],2)}, Orta: {round(res['mid_b'],2)}, Üst: {round(res['u_b'],2)} TL
 Hacim: {res['hacim']} ({res['hacim_oran']}x ortalama)
-Stop-Loss: {res['sl']} TL, Take-Profit: {res['tp']} TL
+Stop-Loss (Bot Önerisi): {res['sl']} TL, Take-Profit (Agresif): {res['tp']} TL
 
 {piyasa_metni}
 
-=== ISLEM TIPI ===
+=== İŞLEM TİPİ ===
 {tip_aciklamasi}
 
-SADECE su formatta cevap ver, baska hicbir sey yazma:
-ALINACAK FIYAT: X.XX TL
-SATILACAK FIYAT: X.XX TL
+SADECE şu formatta cevap ver, başka hiçbir şey yazma:
+ALINACAK FİYAT: X.XX TL
+SATILACAK FİYAT: X.XX TL (Hedef marj minimum %6+)
 STOP-LOSS: X.XX TL
 BEKLENEN KAR: %X.X
-TAHMIN GUVEN: %XX (0-100 arasi)
-GEREKCЕ: (max 2 cumle, Turkce, hem teknik hem haber bazli)"""
+TAHMİN GÜVEN: %XX (0-100 arasi)
+GEREKÇE: (max 2 cümle, Türkçe, hem teknik hem haber bazlı, tavan potansiyelini vurgula)"""
 
         comp = client.chat.completions.create(
             messages=[{"role": "user", "content": talimat}],
