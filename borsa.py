@@ -1,4 +1,8 @@
-import os, sqlite3, logging, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
+import os, logging, telebot, yfinance as yf, pandas_ta as ta, io, threading, warnings, time, requests
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+load_dotenv()
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -38,72 +42,83 @@ GNEWS_KEY    = os.environ.get("GNEWS_API_KEY", "")  # gnews.io - ucretsiz (100 r
 
 bot    = telebot.TeleBot(TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
-USER_CONTEXTS = {}
+
+# Supabase Ayarları
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    logger.error("Supabase URL veya KEY bulunamadı! Veritabanı çalışmayacak.")
+    supabase = None
+else:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logger.info("Supabase bağlantısı kuruldu.")
+
+# USER_CONTEXTS artık Supabase'de tutulacak, 
+# ancak hızlı erişim için local bir cache de tutabiliriz.
+# Şimdilik direkt DB'den okuyup yazacağız.
 
 # ----------------------------------------------------------------
-# VERITABANI
-# Sadece yerel SQLite
+# VERITABANI (Supabase PostgreSQL)
 # ----------------------------------------------------------------
-DB_YOLU = os.environ.get("DB_YOLU", "tahminler.db")
 
-# -----------------------------------------------------------------
 def db_baslat():
-    """Tabloyu olusturur (Turso veya SQLite)."""
-    sql_create = """
-        CREATE TABLE IF NOT EXISTS tahminler (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            anahtar TEXT UNIQUE,
-            ticker TEXT,
-            tarih TEXT,
-            tip TEXT,
-            al_fiyat REAL,
-            hedef REAL,
-            sl REAL,
-            tahmin_yuzde REAL,
-            gerceklesen REAL,
-            gercek_degisim REAL,
-            sonuc TEXT DEFAULT 'BEKLIYOR'
-        )
-    """
-    conn = sqlite3.connect(DB_YOLU)
-    conn.execute(sql_create)
-    conn.commit()
-    conn.close()
-    logger.info("Veritabani hazir: SQLite (%s)", DB_YOLU)
+    """Bağlantı kontrolü yapar."""
+    if supabase:
+        try:
+            # Basit bir select ile bağlantıyı test et
+            supabase.table("tahminler").select("id").limit(1).execute()
+            logger.info("Veritabanı (Supabase) hazır.")
+        except Exception as e:
+            logger.error("Veritabanı bağlantı hatası: %s", e)
+            logger.info("NOT: Tablo henüz oluşturulmamış olabilir. Lütfen SQL scriptini çalıştırın.")
+    else:
+        logger.warning("Supabase istemcisi başlatılamadığı için DB kontrolü atlandı.")
 
 def tahmin_kaydet(ticker, al_fiyat, hedef, sl, tahmin_yuzde, tip="SCALP"):
+    if not supabase: return None
     tarih   = datetime.now(TZ_TR).strftime("%Y-%m-%d %H:%M")
     anahtar = f"{ticker}_{tarih}_{tip}"
-    sql = """
-        INSERT OR IGNORE INTO tahminler
-        (anahtar, ticker, tarih, tip, al_fiyat, hedef, sl, tahmin_yuzde, sonuc)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'BEKLIYOR')
-    """
-    params = (anahtar, ticker, tarih, tip, al_fiyat, hedef, sl, tahmin_yuzde)
+    
+    data = {
+        "anahtar": anahtar,
+        "ticker": ticker,
+        "tarih": tarih,
+        "tip": tip,
+        "al_fiyat": float(al_fiyat) if al_fiyat else 0,
+        "hedef": float(hedef) if hedef else 0,
+        "sl": float(sl) if sl else 0,
+        "tahmin_yuzde": float(tahmin_yuzde) if tahmin_yuzde else 0,
+        "sonuc": "BEKLIYOR"
+    }
+
     try:
-        conn = sqlite3.connect(DB_YOLU)
-        conn.execute(sql, params)
-        conn.commit()
-        conn.close()
+        supabase.table("tahminler").upsert(data, on_conflict="anahtar").execute()
     except Exception as e:
         logger.error("Tahmin kaydedilemedi: %s", e)
     return anahtar
 
 def tahminleri_guncelle():
     """Kapanista tahmin sonuclarini kontrol eder ve bildirir."""
+    if not supabase: return []
     guncellenenler = []
+    
     try:
-        sel_sql = "SELECT anahtar, ticker, al_fiyat, hedef, sl, tip, tahmin_yuzde FROM tahminler WHERE sonuc='BEKLIYOR'"
-        conn = sqlite3.connect(DB_YOLU)
-        bekleyenler = conn.execute(sel_sql).fetchall()
-        conn.close()
+        response = supabase.table("tahminler").select("*").eq("sonuc", "BEKLIYOR").execute()
+        bekleyenler = response.data
     except Exception as e:
         logger.error("Tahmin guncelleme DB hatasi: %s", e)
         return guncellenenler
 
-    upd_sql = "UPDATE tahminler SET gerceklesen=?, gercek_degisim=?, sonuc=? WHERE anahtar=?"
     for row in bekleyenler:
-        anahtar, ticker, al_fiyat, hedef, sl, tip, tahmin_yuzde = row
+        anahtar = row["anahtar"]
+        ticker  = row["ticker"]
+        al_fiyat = row["al_fiyat"]
+        hedef   = row["hedef"]
+        sl      = row["sl"]
+        tip     = row["tip"]
+        tahmin_yuzde = row["tahmin_yuzde"]
+        
         try:
             df = yf.download(f"{ticker}.IS", period="2d", interval="1d",
                              progress=False, timeout=8)
@@ -111,28 +126,36 @@ def tahminleri_guncelle():
                 continue
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+            
             gercek         = float(df.iloc[-1]["Close"])
             gercek_degisim = None
             if al_fiyat and float(al_fiyat) > 0:
                 gercek_degisim = round(((gercek - float(al_fiyat)) / float(al_fiyat)) * 100, 2)
+            
             hedef_f = float(hedef) if hedef else None
             sl_f    = float(sl)    if sl    else None
+            
             if hedef_f and gercek >= hedef_f:
                 sonuc = "KAZANDI"
             elif sl_f and gercek <= sl_f:
                 sonuc = "KAYBETTI"
             else:
                 sonuc = "BEKLIYOR"
-            upd_params = (gercek, gercek_degisim, sonuc, anahtar)
-            conn2 = sqlite3.connect(DB_YOLU)
-            conn2.execute(upd_sql, upd_params)
-            conn2.commit()
-            conn2.close()
-            guncellenenler.append({
-                "ticker": ticker, "tip": tip, "sonuc": sonuc,
-                "tahmin_yuzde": tahmin_yuzde or 0,
-                "gercek_degisim": gercek_degisim or 0
-            })
+            
+            update_data = {
+                "gerceklesen": gercek,
+                "gercek_degisim": gercek_degisim,
+                "sonuc": sonuc
+            }
+            
+            supabase.table("tahminler").update(update_data).eq("anahtar", anahtar).execute()
+            
+            if sonuc != "BEKLIYOR":
+                guncellenenler.append({
+                    "ticker": ticker, "tip": tip, "sonuc": sonuc,
+                    "tahmin_yuzde": tahmin_yuzde or 0,
+                    "gercek_degisim": gercek_degisim or 0
+                })
         except Exception as e:
             logger.error("Tahmin guncellenemedi (%s): %s", ticker, e)
             continue
@@ -140,31 +163,44 @@ def tahminleri_guncelle():
 
 def tahmin_raporu_olustur():
     """Tum tahminlerin ozet raporunu olusturur."""
+    if not supabase: return "Veritabanı bağlantısı yok."
     try:
-        sel_sql = "SELECT ticker, tip, tarih, tahmin_yuzde, al_fiyat, hedef, sonuc, gercek_degisim FROM tahminler ORDER BY tarih DESC LIMIT 20"
-        kaz_sql = "SELECT COUNT(*) FROM tahminler WHERE sonuc='KAZANDI'"
-        kay_sql = "SELECT COUNT(*) FROM tahminler WHERE sonuc='KAYBETTI'"
-        bkl_sql = "SELECT COUNT(*) FROM tahminler WHERE sonuc='BEKLIYOR'"
-        conn = sqlite3.connect(DB_YOLU)
-        rows       = conn.execute(sel_sql).fetchall()
-        kazandi_s  = conn.execute(kaz_sql).fetchone()[0]
-        kaybetti_s = conn.execute(kay_sql).fetchone()[0]
-        bekliyor_s = conn.execute(bkl_sql).fetchone()[0]
-        conn.close()
+        # Son 20 tahmin
+        rows = supabase.table("tahminler").select("*").order("tarih", desc=True).limit(20).execute().data
+        
+        # Sayımlar
+        kazandi_s  = supabase.table("tahminler").select("id", count="exact").eq("sonuc", "KAZANDI").execute().count
+        kaybetti_s = supabase.table("tahminler").select("id", count="exact").eq("sonuc", "KAYBETTI").execute().count
+        bekliyor_s = supabase.table("tahminler").select("id", count="exact").eq("sonuc", "BEKLIYOR").execute().count
+        
+        kazandi_s = kazandi_s or 0
+        kaybetti_s = kaybetti_s or 0
+        bekliyor_s = bekliyor_s or 0
+
     except Exception as e:
         logger.error("Tahmin raporu hatasi: %s", e)
         return "Rapor olusturulamadi."
+        
     if not rows:
         return "Henuz kayitli tahmin yok."
-    toplam = kazandi_s + kaybetti_s
-    basari = round((kazandi_s / toplam) * 100, 1) if toplam > 0 else 0
+        
+    toplam = float(kazandi_s + kaybetti_s)
+    basari = round((float(kazandi_s) / toplam) * 100, 1) if toplam > 0 else 0
     satirlar = [
         "<b>TAHMIN RAPORU</b>", "",
         f"Kazandi: {kazandi_s}  |  Kaybetti: {kaybetti_s}  |  Bekliyor: {bekliyor_s}",
         f"Basari Orani: %{basari}  (toplam {toplam} kapali tahmin)", ""
     ]
     for row in rows:
-        ticker, tip, tarih, tahmin_yuzde, al_fiyat, hedef, sonuc, gercek_degisim = row
+        ticker = row["ticker"]
+        tip    = row["tip"]
+        tarih  = row["tarih"]
+        tahmin_yuzde = row["tahmin_yuzde"]
+        al_fiyat = row["al_fiyat"]
+        hedef = row["hedef"]
+        sonuc = row["sonuc"]
+        gercek_degisim = row["gercek_degisim"]
+        
         ikon       = "✅" if sonuc == "KAZANDI" else ("❌" if sonuc == "KAYBETTI" else "⏳")
         gercek_str = f" | Gercek: %{float(gercek_degisim):+.1f}" if gercek_degisim is not None else ""
         satirlar.append(
@@ -175,14 +211,13 @@ def tahmin_raporu_olustur():
 
 def hisse_kazanma_orani(ticker):
     """Bir hissenin gecmis tahmin basari oranini dondurur (None = yeterli veri yok)."""
+    if not supabase: return None
     try:
-        sql = "SELECT sonuc FROM tahminler WHERE ticker=? AND sonuc IN ('KAZANDI','KAYBETTI')"
-        conn = sqlite3.connect(DB_YOLU)
-        rows = conn.execute(sql, (ticker,)).fetchall()
-        conn.close()
+        response = supabase.table("tahminler").select("sonuc").eq("ticker", ticker).in_("sonuc", ["KAZANDI", "KAYBETTI"]).execute()
+        rows = response.data
         if not rows or len(rows) < 3:
             return None
-        kazandi = sum(1 for r in rows if r[0] == "KAZANDI")
+        kazandi = sum(1 for r in rows if r["sonuc"] == "KAZANDI")
         return kazandi / len(rows)
     except Exception as e:
         logger.error("Kazanma orani hatasi (%s): %s", ticker, e)
@@ -1086,19 +1121,28 @@ GÖREVİN:
 Lütfen kullanıcının şu sorusuna ("{soru}") çok net, keskin, ufuk açıcı ve profesyonel bir yanıt ver. Karar vermesine yardımcı ol, artıları ve eksileri terazinin iki tarafına koy. Karşıdaki kişi rasyonel bir yatırımcı; ona rasyonel, haberlerle desteklenmiş ve teknik göstergelerle yoğrulmuş bir öngörü sun.
 (Yanıtının sonuna Yasal Uyarı olarak bunun bir yatırım tavsiyesi olmadığını 1 cümleyle ekle.)
 """
+        talimat_listesi = [{"role": "system", "content": talimat}]
         
-        USER_CONTEXTS[chat_id] = {
+        # Supabase'e kaydet (upsert)
+        context_data = {
+            "chat_id": chat_id,
             "ticker": ticker,
-            "history": [{"role": "system", "content": talimat}]
+            "history": talimat_listesi # jsonb olarak gidecek
         }
+        if supabase:
+            supabase.table("user_contexts").upsert(context_data).execute()
         
         comp = client.chat.completions.create(
-            messages=USER_CONTEXTS[chat_id]["history"],
+            messages=talimat_listesi,
             model="llama-3.3-70b-versatile",
             temperature=0.5
         )
         cevap_ham = comp.choices[0].message.content.strip()
-        USER_CONTEXTS[chat_id]["history"].append({"role": "assistant", "content": cevap_ham})
+        
+        # Cevabi da ekle ve guncelle
+        talimat_listesi.append({"role": "assistant", "content": cevap_ham})
+        if supabase:
+            supabase.table("user_contexts").update({"history": talimat_listesi}).eq("chat_id", chat_id).execute()
         
         cevap = html.escape(cevap_ham)
         bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
@@ -1109,26 +1153,31 @@ Lütfen kullanıcının şu sorusuna ("{soru}") çok net, keskin, ufuk açıcı 
         except:
             pass
 
-def _ai_sohbet_devam(chat_id, metin):
+def _ai_sohbet_devam(chat_id, metin, current_context):
     import html
+    if not supabase: return
     try:
-        USER_CONTEXTS[chat_id]["history"].append({"role": "user", "content": metin})
-        messages = USER_CONTEXTS[chat_id]["history"]
+        history = current_context.get("history", [])
+        ticker  = current_context.get("ticker", "Bilinmiyor")
+        
+        history.append({"role": "user", "content": metin})
         
         # Son 7 mesaji tut (1 system + 6 chat) hafiza sismemesi icin
-        if len(messages) > 7:
-            messages = [messages[0]] + messages[-6:]
+        if len(history) > 7:
+            history = [history[0]] + history[-6:]
             
         comp = client.chat.completions.create(
-            messages=messages,
+            messages=history,
             model="llama-3.3-70b-versatile",
             temperature=0.5
         )
         cevap_ham = comp.choices[0].message.content.strip()
-        USER_CONTEXTS[chat_id]["history"].append({"role": "assistant", "content": cevap_ham})
+        history.append({"role": "assistant", "content": cevap_ham})
+        
+        # Supabase guncelle
+        supabase.table("user_contexts").update({"history": history}).eq("chat_id", chat_id).execute()
         
         cevap = html.escape(cevap_ham)
-        ticker = USER_CONTEXTS[chat_id]["ticker"]
         bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
     except Exception as e:
         logger.error("AI sohbet devam hatasi: %s", e)
@@ -1305,12 +1354,16 @@ def _genel_metin_islem(chat_id, text):
             _ai_sohbet_islem(chat_id, ilk_kelime, soru)
     else:
         # HISSE BULUNAMADI! O zaman sohbetin devami midir?
-        if chat_id in USER_CONTEXTS:
-            # Devam eden sohbet var, yapay zekaya yolla
-            bot.send_message(chat_id, f"🤖 Yapay zeka düşünüyor...", parse_mode="HTML")
-            _ai_sohbet_devam(chat_id, text)
+        if supabase:
+            res_ctx = supabase.table("user_contexts").select("*").eq("chat_id", chat_id).execute()
+            if res_ctx.data:
+                # Devam eden sohbet var, yapay zekaya yolla
+                bot.send_message(chat_id, f"🤖 Yapay zeka düşünüyor...", parse_mode="HTML")
+                _ai_sohbet_devam(chat_id, text, res_ctx.data[0])
+            else:
+                bot.send_message(chat_id, f"❌ <b>{ilk_kelime}</b> kodlu hisse bulunamadı. Sohbet etmek için önce geçerli bir hisse kodu yazın (Örn: THYAO nasıl?)", parse_mode="HTML")
         else:
-            bot.send_message(chat_id, f"❌ <b>{ilk_kelime}</b> kodlu hisse bulunamadı. Sohbet etmek için önce geçerli bir hisse kodu yazın (Örn: THYAO nasıl?)", parse_mode="HTML")
+            bot.send_message(chat_id, f"❌ Veritabanı bağlantısı yok.")
 
 
 @bot.message_handler(func=lambda m: True)

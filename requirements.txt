@@ -9,3 +9,5 @@ requests
 schedule
 APScheduler
 pytz
+supabase
+python-dotenv
