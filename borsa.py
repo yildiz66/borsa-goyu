@@ -368,10 +368,13 @@ def hesapla_sl_tp(df, fiyat, atr_carpan=1.5):
         return None, None, None
 
 def bist100_trend_kontrol():
-    """BIST100 piyasa yonunu kontrol eder (True = Guvenli, False = Riskli)."""
+    """BIST100 piyasa yonunu kontrol eder (True = Guvenli, False = Riskli).
+    Ayrica gunluk getiriyi de dondurur.
+    """
     try:
         df = yf.download("XU100.IS", period="2d", interval="1d", progress=False, timeout=8)
-        if df is None or df.empty: return True # Veri yoksa guvenli varsay
+        if df is None or df.empty or len(df) < 2: 
+            return True, 0
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         
         c_p    = float(df.iloc[-1]["Close"])
@@ -379,15 +382,16 @@ def bist100_trend_kontrol():
         degisim = ((c_p - prev_p) / prev_p) * 100
         
         # BIST100 gunluk %2'den fazla dusuyorsa riskli
-        if degisim < -2.0: return False
-        return True
+        if degisim < -2.0: 
+            return False, round(degisim, 2)
+        return True, round(degisim, 2)
     except:
-        return True
+        return True, 0
 
 # ----------------------------------------------------------------
 # ANALIZ MOTORU (hisse)
 # ----------------------------------------------------------------
-def analiz_motoru(hisse, vade="1d"):
+def analiz_motoru(hisse, vade="1d", bist_ret=0):
     try:
         hisse_clean = hisse.upper().strip()
         # Eger zaten .IS, =X, =F veya ^ ile basliyorsa dokunma, yoksa .IS ekle
@@ -406,8 +410,6 @@ def analiz_motoru(hisse, vade="1d"):
             df.columns = df.columns.get_level_values(0)
 
         # VWAP Hesapla
-        # vwap = (Price * Volume) cum sum / Volume cum sum
-        # pandas_ta vwap genellikle intraday için. Manuel hesapliyoruz (gunluk bazda yaklasik)
         df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
 
         df["EMA9"]    = ta.ema(df["Close"], length=9)
@@ -441,26 +443,18 @@ def analiz_motoru(hisse, vade="1d"):
         df["MFI"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
         
         # ADX (Average Directional Index) -- Trendin Gücü (0-100)
-        # 25 üstü güçlü bir trend olduğunu gösterir.
         adx_df = ta.adx(df["High"], df["Low"], df["Close"], length=14)
         df["ADX"] = adx_df["ADX_14"]
         
         # Göreceli Güç (Relative Strength vs BIST100)
-        # BIST100 verisi çek ve kıyasla
-        bist = yf.download("XU100.IS", period="2d", interval="1d", progress=False, timeout=5)
-        if bist is not None and not bist.empty:
-            if isinstance(bist.columns, pd.MultiIndex): bist.columns = bist.columns.get_level_values(0)
-            bist_ret = ((float(bist.iloc[-1]["Close"]) - float(bist.iloc[-2]["Close"])) / float(bist.iloc[-2]["Close"])) * 100
-            stock_ret = ((c_p - float(prev["Close"])) / float(prev["Close"])) * 100
-            rs = round(stock_ret - bist_ret, 2) # Endeksten ne kadar daha iyi/kotü (+ ise endeksi yenmiş)
-        else:
-            rs = 0
+        stock_ret = ((c_p - float(prev["Close"])) / float(prev["Close"])) * 100
+        rs = round(stock_ret - bist_ret, 2) # Endeksten ne kadar daha iyi/kotü (+ ise endeksi yenmiş)
 
         last_idx = df.iloc[-1]
         mfi_v = float(last_idx["MFI"]) if not pd.isna(last_idx["MFI"]) else 50
         adx_v = float(last_idx["ADX"]) if not pd.isna(last_idx["ADX"]) else 0
         
-        # Trend Gucu: Fiyat SMA200 ustunde ve EMA9 > EMA21 ise GUCLU
+        # Trend Gucu
         trend = "GUCLU YUXARI" if (c_p > s200 and ema9 > ema21 and c_p > vwap) else \
                 "YUKARI" if (c_p > s200 or ema9 > ema21) else \
                 "YATAY" if abs(c_p - s200)/s200 < 0.03 else "ASAGI"
@@ -475,7 +469,6 @@ def analiz_motoru(hisse, vade="1d"):
         sl, tp, rr = hesapla_sl_tp(df, c_p)
         
         # Süper Sinyal Kontrolü
-        # Para Girişi Güçlü (MFI > 60), Trend Başlamış (ADX > 25) ve Endeksten Güçlü (RS > 0)
         super_signal = (mfi_v > 60 and adx_v > 25 and rs > 0)
 
         return {
@@ -816,13 +809,7 @@ def su_anki_vade_ve_mod_belirle():
 # FILTRELEME & SIRALAMA
 # ----------------------------------------------------------------
 def filtrele_sirala(havuz, mod):
-    # Piyasa kotuyse filtrele (Opsiyonel: Kullanici kesin para kazanmak istiyor)
-    if not bist100_trend_kontrol():
-        logger.warning("Piyasa (BIST100) riskli gorunuyor, filtreler sikilastirildi.")
-        devam_et = False # Cok guclu sinyal yoksa dondurme
-    else:
-        devam_et = True
-
+    # Piyasa durumuna gore sikilastirma yapılabilir (bist100_trend_kontrol sonucu buraya parametre gelebilir ama suan global/tekrar bagimsiz)
     sonuc = []
     for res in havuz:
         # Kazanma orani filtresi (%40 alti ise alma)
@@ -830,22 +817,26 @@ def filtrele_sirala(havuz, mod):
         if k_orani is not None and k_orani < 0.40:
             continue
 
+        # ADX Filtresi: Trend gucu olmayan hisseleri ele (ADX < 20 ise alma)
+        if res.get("adx", 0) < 20:
+            continue
+
         if mod == "GUNLUK_SCALP":
             # Scalp: RSI orta seviyelerde, hacim pozitif, EMA9 > EMA21 ve Fiyat > VWAP
-            if (35 < res["rsi"] < 65 and res["hacim_oran"] >= 0.9 and 
+            if (35 < res["rsi"] < 70 and res["hacim_oran"] >= 0.8 and 
                 res["ema9"] > res["ema21"] and res["fiyat"] > res["vwap"]):
                 sonuc.append(res)
         elif mod == "GUNLUK_SWING":
-            # Swing: Ana trend (SMA200) yukari, RSI asiri alimda degil
-            if (res["fiyat"] > res["s200"] and 30 < res["rsi"] < 68 and 
+            # Swing: Ana trend (SMA200) yukari, EMA9 > EMA21
+            if (res["fiyat"] > res["s200"] and 30 < res["rsi"] < 70 and 
                 res["ema9"] > res["ema21"]):
                 sonuc.append(res)
         elif mod == "HAFTALIK":
-            if res["fiyat"] > res["s200"] and 35 < res["rsi"] < 70:
+            if res["fiyat"] > res["s200"] and 35 < res["rsi"] < 72:
                 sonuc.append(res)
         else:
             # Diger vadeler (Aylik vb.)
-            if res["fiyat"] > res["s200"] and res["rsi"] < 72:
+            if res["fiyat"] > res["s200"] and res["rsi"] < 75:
                 sonuc.append(res)
 
     # Potansiyele (Bollinger Ust Bandina uzaklik) ve Goreceli Guce gore sirala
@@ -863,22 +854,36 @@ def filtrele_sirala(havuz, mod):
 # RAPOR GONDER (ana fonksiyon)
 # ----------------------------------------------------------------
 def rapor_gonder(liste, vade, mod, baslik, otomatik=False):
+    """Belirlenen hisse havuzunu tarar, en iyi 3 hisseyi ve madenleri gonderir."""
+    # BIST100 Durumu ve Getirisi (Bir kere al, tum hisselere dagit)
+    piyasa_ok, bist_ret = bist100_trend_kontrol()
+    piyasa_metni = f"BIST100 Günlük: %{bist_ret:+.2f}"
+    
     try:
-        bot.send_message(MY_ID,
-            f"<b>{baslik} ANALIZ BASLADI</b>\n{len(liste)} hisse taranıyor...",
-            parse_mode="HTML")
+        if not otomatik:
+            bot.send_message(MY_ID,
+                f"🔍 <b>{baslik}</b> baslatildi...\n{piyasa_metni}\nHisse Sayısı: {len(liste)}\nTahmini Süre: {round(len(liste)/12, 1)} dk",
+                parse_mode="HTML")
     except:
         pass
 
     # Piyasa baglamini bir kez cek
-    piyasa = piyasa_baglamı_olustur()
+    piyasa_baglam = piyasa_baglamı_olustur()
 
+    # HISSE TARAMA (Parallel Processing)
     havuz = []
-    for h in liste:
-        res = analiz_motoru(h, vade)
-        if res:
-            havuz.append(res)
-        time.sleep(0.05)
+    from concurrent.futures import ThreadPoolExecutor
+    
+    def analyze_task(ticker):
+        try:
+            return analiz_motoru(ticker, vade, bist_ret)
+        except:
+            return None
+
+    # Thread sayisini Railway kaynaklarina gore 12 civari tutalim
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(executor.map(analyze_task, liste))
+        havuz = [r for r in results if r is not None]
 
     en_iyi = filtrele_sirala(havuz, mod)
 
@@ -891,7 +896,7 @@ def rapor_gonder(liste, vade, mod, baslik, otomatik=False):
         return
 
     for t in en_iyi:
-        ai_yanit = ai_sinyal_uret(t, mod, piyasa)
+        ai_yanit = ai_sinyal_uret(t, mod, piyasa_baglam)
 
         # Tahmini kaydet
         al_f, sat_f, sl_f, kar_f = ai_yanit_parse(ai_yanit, t["fiyat"])
