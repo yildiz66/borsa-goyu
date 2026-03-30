@@ -665,10 +665,10 @@ GEREKCЕ: (max 2 cumle, Turkce)"""
 def ai_yanit_parse(ai_yanit, fiyat):
     """AI cevabindan al/sat/sl/tp degerlerini cikarir, tahmin kaydeder."""
     try:
-        al  = re.search(r"ALINACAK\s+F[Iİiı]YAT[:\s]+([0-9]+[.,][0-9]+)", ai_yanit, re.IGNORECASE)
-        sat = re.search(r"SATILACAK\s+F[Iİiı]YAT[:\s]+([0-9]+[.,][0-9]+)", ai_yanit, re.IGNORECASE)
-        sl  = re.search(r"STOP.LOSS[:\s]+([0-9]+[.,][0-9]+)", ai_yanit, re.IGNORECASE)
-        kar = re.search(r"BEKLENEN\s+KAR[:\s]+%?([0-9]+[.,][0-9]+)", ai_yanit, re.IGNORECASE)
+        al  = re.search(r"ALINACAK\s+F[Iİiı]YAT[Iİiı]?[:\s]+([0-9]+(?:[.,][0-9]+)?)", ai_yanit, re.IGNORECASE)
+        sat = re.search(r"SATILACAK\s+F[Iİiı]YAT[Iİiı]?[:\s]+([0-9]+(?:[.,][0-9]+)?)", ai_yanit, re.IGNORECASE)
+        sl  = re.search(r"STOP.LOSS[:\s]+([0-9]+(?:[.,][0-9]+)?)", ai_yanit, re.IGNORECASE)
+        kar = re.search(r"BEKLENEN\s+KAR[:\s]+%?([0-9]+(?:[.,][0-9]+)?)", ai_yanit, re.IGNORECASE)
 
         al_f  = float(al.group(1).replace(",","."))  if al  else fiyat
         sat_f = float(sat.group(1).replace(",",".")) if sat else None
