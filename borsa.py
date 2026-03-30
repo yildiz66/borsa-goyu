@@ -30,6 +30,7 @@ BOT_BASLANGIC = datetime.now()
 app       = Flask(__name__)
 TZ_TR     = pytz.timezone("Europe/Istanbul")
 scheduler = BackgroundScheduler(timezone=TZ_TR)
+yf_lock   = threading.Lock()
 
 # ----------------------------------------------------------------
 # ORTAM DEGISKENLERI
@@ -120,8 +121,9 @@ def tahminleri_guncelle():
         tahmin_yuzde = row["tahmin_yuzde"]
         
         try:
-            df = yf.download(f"{ticker}.IS", period="2d", interval="1d",
-                             progress=False, timeout=8)
+            with yf_lock:
+                df = yf.download(f"{ticker}.IS", period="2d", interval="1d",
+                                 progress=False, timeout=8)
             if df is None or df.empty:
                 continue
             if isinstance(df.columns, pd.MultiIndex):
@@ -252,8 +254,9 @@ def doviz_makro_cek():
         }
         sonuc = {}
         for sembol, isim in semboller.items():
-            df = yf.download(sembol, period="2d", interval="1d",
-                             progress=False, timeout=6)
+            with yf_lock:
+                df = yf.download(sembol, period="2d", interval="1d",
+                                 progress=False, timeout=6)
             if df is None or df.empty:
                 continue
             if isinstance(df.columns, pd.MultiIndex):
@@ -372,7 +375,8 @@ def bist100_trend_kontrol():
     Ayrica gunluk getiriyi de dondurur.
     """
     try:
-        df = yf.download("XU100.IS", period="2d", interval="1d", progress=False, timeout=8)
+        with yf_lock:
+            df = yf.download("XU100.IS", period="2d", interval="1d", progress=False, timeout=8)
         if df is None or df.empty or len(df) < 2: 
             return True, 0
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -403,8 +407,9 @@ def analiz_motoru(hisse, vade="1d", bist_ret=0):
             ticker = hisse_clean
             
         # Daha saglikli MA verisi icin 2 yil yerine 2.5 yil cekelim (SMA200 daha stabil olur)
-        df = yf.download(ticker, period="3y", interval="1d",
-                         progress=False, timeout=10)
+        with yf_lock:
+            df = yf.download(ticker, period="3y", interval="1d",
+                             progress=False, timeout=10)
         if df is None or df.empty or len(df) < 201:
             logger.warning(f"Veri yetersiz: {ticker}")
             return None
@@ -506,8 +511,9 @@ def analiz_motoru(hisse, vade="1d", bist_ret=0):
 def maden_analiz_motoru(ticker_ham, aciklama, bist=True, vade="1d"):
     try:
         ticker = f"{ticker_ham}.IS" if bist else ticker_ham
-        df = yf.download(ticker, period="2y", interval=vade,
-                         progress=False, timeout=10)
+        with yf_lock:
+            df = yf.download(ticker, period="2y", interval=vade,
+                             progress=False, timeout=10)
         if df is None or df.empty or len(df) < 50:
             return None
         if isinstance(df.columns, pd.MultiIndex):
