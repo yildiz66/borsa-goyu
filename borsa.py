@@ -376,6 +376,8 @@ def bist100_trend_kontrol():
         if df is None or df.empty or len(df) < 2: 
             return True, 0
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+        df.dropna(subset=["Close"], inplace=True)
         
         c_p    = float(df.iloc[-1]["Close"])
         prev_p = float(df.iloc[-2]["Close"])
@@ -409,8 +411,19 @@ def analiz_motoru(hisse, vade="1d", bist_ret=0):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # VWAP Hesapla
-        df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
+        # Çoklu thread hatasını önlemek için mükerrer sütunları temizle
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+        
+        # Olası boş verileri (NaN) güncel değerlerle sorun yaşamamak için temizle
+        df.dropna(subset=["Close", "Volume"], inplace=True)
+
+        # VWAP Hesapla (3 yıllık kümülatif yerine son 20 günlük Hareketli VWAP - fiyat sapmalarını önler)
+        try:
+            df["VWAP"] = (df["Close"] * df["Volume"]).rolling(window=20, min_periods=1).sum() / df["Volume"].rolling(window=20, min_periods=1).sum()
+        except:
+            df["VWAP"] = df["Close"]
+            
+        df["VWAP"] = df["VWAP"].fillna(df["Close"])
 
         df["EMA9"]    = ta.ema(df["Close"], length=9)
         df["EMA21"]   = ta.ema(df["Close"], length=21)
@@ -499,6 +512,10 @@ def maden_analiz_motoru(ticker_ham, aciklama, bist=True, vade="1d"):
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+
+        # Çoklu thread hatasını önlemek için mükerrer sütunları temizle
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+        df.dropna(subset=["Close", "Volume"], inplace=True)
 
         uzun_ma       = 200 if len(df) >= 201 else 50
         df["EMA9"]    = ta.ema(df["Close"], length=9)
