@@ -69,6 +69,11 @@ def db_baslat():
             # Basit bir select ile bağlantıyı test et
             supabase.table("tahminler").select("id").limit(1).execute()
             logger.info("Veritabanı (Supabase) hazır.")
+            
+            # --- GEÇİCİ VERİTABANI SIFIRLAMA KODU ---
+            supabase.table("tahminler").delete().neq("ticker", "BOS").execute()
+            logger.info("TÜM ESKİ TAHMİNLER KALICI OLARAK SİLİNDİ!")
+            # ----------------------------------------
         except Exception as e:
             logger.error("Veritabanı bağlantı hatası: %s", e)
             logger.info("NOT: Tablo henüz oluşturulmamış olabilir. Lütfen SQL scriptini çalıştırın.")
