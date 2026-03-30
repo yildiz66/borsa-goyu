@@ -55,9 +55,8 @@ else:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     logger.info("Supabase bağlantısı kuruldu.")
 
-# USER_CONTEXTS artık Supabase'de tutulacak, 
-# ancak hızlı erişim için local bir cache de tutabiliriz.
-# Şimdilik direkt DB'den okuyup yazacağız.
+# Hızlı mesajlaşma için sohbet contextini bellekte tutuyoruz
+USER_CONTEXTS = {}
 
 # ----------------------------------------------------------------
 # VERITABANI (Supabase PostgreSQL)
@@ -1192,26 +1191,19 @@ Lütfen kullanıcının şu sorusuna ("{soru}") çok net, keskin, ufuk açıcı 
 """
         talimat_listesi = [{"role": "system", "content": talimat}]
         
-        # Supabase'e kaydet (upsert)
-        context_data = {
-            "chat_id": chat_id,
-            "ticker": ticker,
-            "history": talimat_listesi # jsonb olarak gidecek
-        }
-        if supabase:
-            supabase.table("user_contexts").upsert(context_data).execute()
-        
         comp = client.chat.completions.create(
             messages=talimat_listesi,
             model="llama-3.3-70b-versatile",
-            temperature=0.5
+            temperature=0.7
         )
         cevap_ham = comp.choices[0].message.content.strip()
         
-        # Cevabi da ekle ve guncelle
+        # Cevabi da ekle ve belleğe kaydet
         talimat_listesi.append({"role": "assistant", "content": cevap_ham})
-        if supabase:
-            supabase.table("user_contexts").update({"history": talimat_listesi}).eq("chat_id", chat_id).execute()
+        USER_CONTEXTS[chat_id] = {
+            "ticker": ticker,
+            "history": talimat_listesi
+        }
         
         cevap = html.escape(cevap_ham)
         bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
@@ -1224,7 +1216,6 @@ Lütfen kullanıcının şu sorusuna ("{soru}") çok net, keskin, ufuk açıcı 
 
 def _ai_sohbet_devam(chat_id, metin, current_context):
     import html
-    if not supabase: return
     try:
         history = current_context.get("history", [])
         ticker  = current_context.get("ticker", "Bilinmiyor")
@@ -1238,13 +1229,16 @@ def _ai_sohbet_devam(chat_id, metin, current_context):
         comp = client.chat.completions.create(
             messages=history,
             model="llama-3.3-70b-versatile",
-            temperature=0.5
+            temperature=0.7
         )
         cevap_ham = comp.choices[0].message.content.strip()
         history.append({"role": "assistant", "content": cevap_ham})
         
-        # Supabase guncelle
-        supabase.table("user_contexts").update({"history": history}).eq("chat_id", chat_id).execute()
+        # Belleği güncelle
+        USER_CONTEXTS[chat_id] = {
+            "ticker": ticker,
+            "history": history
+        }
         
         cevap = html.escape(cevap_ham)
         bot.send_message(chat_id, f"🤖 <b>{ticker} AI Yanıtı:</b>\n\n{cevap}", parse_mode="HTML")
@@ -1401,8 +1395,10 @@ def _genel_metin_islem(chat_id, text):
     parca = text.split(" ", 1)
     ilk_kelime = parca[0].upper()
     
-    # Once hisse kodu olup olmadigini hizlica analiz motoruna sorarak test et
-    res = analiz_motoru(ilk_kelime, "1d")
+    # 1. Aşama: Yahoo Finance gecikmesini önlemek için hisse kontrolü (2 ile 7 harf arası)
+    res = None
+    if 2 <= len(ilk_kelime) <= 7 and ilk_kelime.isalnum():
+        res = analiz_motoru(ilk_kelime, "1d")
     
     if res:
         # BU BIR HISSE ISTEGI!
@@ -1420,19 +1416,15 @@ def _genel_metin_islem(chat_id, text):
         else:
             # Hisse + Soru: "THYAO sence nasil" -> Yeni Sohbet Baslangici
             soru = parca[1]
+            bot.send_message(chat_id, f"🤖 <b>{ilk_kelime}</b> için yapay zekaya danışılıyor...", parse_mode="HTML")
             _ai_sohbet_islem(chat_id, ilk_kelime, soru)
     else:
-        # HISSE BULUNAMADI! O zaman sohbetin devami midir?
-        if supabase:
-            res_ctx = supabase.table("user_contexts").select("*").eq("chat_id", chat_id).execute()
-            if res_ctx.data:
-                # Devam eden sohbet var, yapay zekaya yolla
-                bot.send_message(chat_id, f"🤖 Yapay zeka düşünüyor...", parse_mode="HTML")
-                _ai_sohbet_devam(chat_id, text, res_ctx.data[0])
-            else:
-                bot.send_message(chat_id, f"❌ <b>{ilk_kelime}</b> kodlu hisse bulunamadı. Sohbet etmek için önce geçerli bir hisse kodu yazın (Örn: THYAO nasıl?)", parse_mode="HTML")
+        # HISSE DEĞİL VEYA BULUNAMADI! Sohbet devam ediyor mu?
+        if chat_id in USER_CONTEXTS:
+            bot.send_message(chat_id, f"🤖 Yapay zeka düşünüyor...", parse_mode="HTML")
+            _ai_sohbet_devam(chat_id, text, USER_CONTEXTS[chat_id])
         else:
-            bot.send_message(chat_id, f"❌ Veritabanı bağlantısı yok.")
+            bot.send_message(chat_id, f"❌ Anlayamadım. Sohbet etmek için önce geçerli bir hisse kodu yazın (Örn: THYAO nasıl?) veya tek başına kod yazın (Örn: THYAO).", parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: True)
